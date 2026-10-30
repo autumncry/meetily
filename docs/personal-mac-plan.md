@@ -55,6 +55,8 @@
 
 ### Task 3: Bounded speaker experiment and optional integration
 
+The local experiment passed for explicitly known participant counts. Implement the scoped decision in [personal-speakers-integration.md](personal-speakers-integration.md); automatic count is omitted. Preserve prior runs and manual overlays, and expose mixed-speaker chunks honestly.
+
 **Files:** Local experiment tools/results under parent `Work/diarization` and `Validation/diarization`; only reusable source may enter `Code/scripts/personal/`. If the experiment passes, add meeting-speaker/turn data, commands, frontend controls and tests through current Rust/SQLite services.
 
 **Interfaces:** A local acoustic backend returns timestamped anonymous speaker turns, separate from human display names. Meeting-local speaker IDs and manual overrides are stable across reprocessing. Export adapters consume display labels through a normalized document field.
