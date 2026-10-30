@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import JSZip from 'jszip';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
 import { buildMeetingDocument, renderMeetingDocument } from '../../src/lib/meeting-export';
 import { collectAllTranscripts, saveMeetingExport } from '../../src/lib/meeting-export/save';
 
@@ -11,6 +14,22 @@ const meeting = { title: '访谈 / 讨论: 😀', date: '2026-10-30T08:00:00+08:
 const transcripts = Array.from({ length: 240 }, (_, i) => ({ id: String(i), text: `中文片段 ${i} 😀`, timestamp: '08:00:00', audio_start_time: i * 10 }));
 
 describe('meeting exports', () => {
+  test.each([
+    '1. Parent\n   1. Child\n   2. Child two\n2. Parent two',
+    '12. Parent\n\n    3. Child\n       - Mixed child\n    4. Child two\n13. Parent two',
+    '- Parent\n\n  10. Ordered child\n      - Bullet grandchild\n  11. Ordered two\n- Parent two',
+    '1. Parent\n\n   Continuation paragraph\n\n   - Mixed child\n\n     Child continuation\n\n2. Parent two',
+  ])('Markdown retains GFM list hierarchy on AST round-trip: %s', async markdown => {
+    const parse = (text: string) => unified().use(remarkParse).use(remarkGfm).parse(text);
+    // Compare semantic list structure, starts and actual paragraph text, rather
+    // than source whitespace or parser position/spread formatting metadata.
+    const shape = (node: any): any => ({ type: node.type, ...(node.type === 'list' ? { ordered: node.ordered, start: node.start } : {}), ...(node.type === 'text' ? { value: node.value } : {}), ...(node.children ? { children: node.children.map(shape) } : {}) });
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { markdown } });
+    const exported = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    const actual = parse(exported).children.filter(n => n.type === 'list').map(shape);
+    const expected = parse(markdown).children.filter(n => n.type === 'list').map(shape);
+    expect(actual).toEqual(expected);
+  });
   test('retains every ordered transcript, Unicode, title and recording timestamps', async () => {
     const doc = buildMeetingDocument({ ...meeting, transcripts: [...transcripts].reverse(), content: 'transcript' });
     const out = await renderMeetingDocument(doc, 'md');
@@ -132,5 +151,25 @@ describe('meeting exports', () => {
       expect(page).toBeDefined();
       expect(page).toContain('FIRST_BODY_LINE');
     } finally { await rm(directory, { recursive: true, force: true }); }
+  }, 60000);
+
+  test.skipIf(!Bun.which('pdftotext'))('PDF preserves rare Han names in its searchable Unicode text', async () => {
+    const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf', 'NotoSansJP-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
+    const document = buildMeetingDocument({ ...meeting, content: 'transcript', transcripts: [{ text: '参会人：𠮷田', audio_start_time: 0 }] });
+    const result = await renderMeetingDocument(document, 'pdf', { fonts: { cjk: fonts[0], emoji: fonts[1], hanFallback: fonts[2] } });
+    const directory = await mkdtemp(join(tmpdir(), 'meetily-rare-han-test-'));
+    try {
+      const path = join(directory, 'rare-han.pdf');
+      await writeFile(path, result.bytes);
+      const text = execFileSync('pdftotext', ['-layout', path, '-'], { encoding: 'utf8' });
+      expect(text).toContain('𠮷田');
+      expect(text).not.toContain('[U+20BB7]');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  }, 60000);
+
+  test('PDF rejects unsupported Unicode with a preserving-format alternative', async () => {
+    const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf', 'NotoSansJP-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
+    const document = buildMeetingDocument({ ...meeting, content: 'transcript', transcripts: [{ text: 'Custom character \u{F0000}' }] });
+    await expect(renderMeetingDocument(document, 'pdf', { fonts: { cjk: fonts[0], emoji: fonts[1], hanFallback: fonts[2] } })).rejects.toThrow(/PDF.*U\+F0000.*Markdown.*DOCX/);
   }, 60000);
 });

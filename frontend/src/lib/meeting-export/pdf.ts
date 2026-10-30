@@ -16,9 +16,10 @@ export async function renderPdf(document: MeetingDocument, fonts: ExportFonts): 
   // can produce searchable text with missing visible CJK glyphs in PDF readers.
   const cjk = await pdf.embedFont(fonts.cjk, { subset: true });
   const emoji = await pdf.embedFont(fonts.emoji, { subset: false });
+  const hanFallback = fonts.hanFallback ? await pdf.embedFont(fonts.hanFallback, { subset: true }) : null;
   const cjkChars = new Set(cjk.getCharacterSet()), emojiChars = new Set(emoji.getCharacterSet());
+  const fallbackChars = new Set(hanFallback?.getCharacterSet() || []);
   const warnings = [...document.warnings];
-  const missing = new Set<string>();
   let page: PDFPage;
   let y = 0;
   const newPage = () => { page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]); y = PAGE_HEIGHT - MARGIN; };
@@ -27,14 +28,11 @@ export async function renderPdf(document: MeetingDocument, fonts: ExportFonts): 
   const glyphs = (runs: Inline[], size: number): Glyph[] => runs.flatMap(run => Array.from(run.text.replace(/\r\n?/g, '\n')).flatMap(char => {
     if (char === '\n') return [{ text: '\n', font: cjk, width: 0, run }];
     const code = char.codePointAt(0)!;
-    // Variation selectors are part of the previous symbol's presentation, not
-    // standalone glyphs; textual emoji remains searchable via its base scalar.
-    if (code === 0xFE0F || code === 0xFE0E) return [];
-    const font = cjkChars.has(code) ? cjk : emojiChars.has(code) ? emoji : null;
+    const font = cjkChars.has(code) ? cjk : emojiChars.has(code) ? emoji : fallbackChars.has(code) ? hanFallback : null;
     if (font) return [{ text: char, font, width: font.widthOfTextAtSize(char, size), run }];
-    const token = `[U+${code.toString(16).toUpperCase()}]`;
-    missing.add(token);
-    return Array.from(token).map(text => ({ text, font: cjk, width: cjk.widthOfTextAtSize(text, size), run }));
+    // Never turn valid source text into a different searchable string and call
+    // that a successful export. This throws before the native write boundary.
+    throw new Error(`PDF cannot preserve character U+${code.toString(16).toUpperCase()} with the bundled fonts. Choose Markdown or DOCX to retain the original text.`);
   }));
   const wrap = (runs: Inline[], size: number, width: number): Glyph[][] => {
     const lines: Glyph[][] = [];
@@ -104,7 +102,6 @@ export async function renderPdf(document: MeetingDocument, fonts: ExportFonts): 
       paragraph(runs, heading ? Math.max(11, 18 - (block.level || 1) * 1.5) : 10.5, Math.min(120, (block.depth || 0) * 14 + (block.kind === 'quote' ? 14 : 0)), heading ? 10 : 7, heading);
     }
   }
-  if (missing.size) warnings.push(`Unsupported font glyphs were preserved as Unicode code-point labels: ${[...missing].join(', ')}`);
   if (warnings.length) {
     paragraph([{ text: 'Export notes' }], 13, 0, 8, true);
     for (const warning of warnings) paragraph([{ text: warning }], 9);

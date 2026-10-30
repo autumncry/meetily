@@ -18,7 +18,7 @@ function blockMarkdown(block: DocumentBlock): string {
   const text = runsToMarkdown(block.runs);
   switch (block.kind) {
     case 'heading': return `${'#'.repeat(block.level || 1)} ${text}`;
-    case 'list': return `${'  '.repeat(block.depth || 0)}${block.marker === '•' ? '-' : block.marker} ${text}`;
+    case 'list': return text;
     case 'quote': return text.split('\n').map(line => `> ${line}`).join('\n');
     case 'code': { const fence = '`'.repeat(Math.max(3, ...(plainText(block.runs).match(/`+/g) || []).map(s => s.length + 1))); return `${fence}\n${plainText(block.runs)}\n${fence}`; }
     case 'table': {
@@ -32,7 +32,25 @@ function blockMarkdown(block: DocumentBlock): string {
   }
 }
 export function renderMarkdown(document: MeetingDocument): Uint8Array {
-  const sections = [`# ${document.title}`, `Date: ${document.date}`, ...document.blocks.map(blockMarkdown)];
+  // Child blocks align under the ancestor's content, not a fixed two spaces:
+  // `1. ` needs 3 columns and `12. ` needs 4. Non-list blocks one depth below
+  // an item are its continuation paragraphs/tables and share that indentation.
+  const ancestorWidths: number[] = [];
+  const blocks = document.blocks.map(block => {
+    const depth = block.depth || 0;
+    const indent = ancestorWidths.slice(0, depth).reduce((sum, width) => sum + width, 0);
+    const text = blockMarkdown(block);
+    if (block.kind === 'list') {
+      const marker = block.marker === '•' ? '-' : /^\[[ x]\]$/i.test(block.marker || '') ? `- ${block.marker}` : block.marker || '-';
+      ancestorWidths.length = depth;
+      const width = marker.startsWith('- [') ? 2 : marker.length + 1;
+      ancestorWidths[depth] = width;
+      return text.split('\n').map((line, index) => `${' '.repeat(indent)}${index ? ' '.repeat(width) : `${marker} `}${line}`).join('\n');
+    }
+    ancestorWidths.length = Math.min(ancestorWidths.length, depth);
+    return text.split('\n').map(line => ' '.repeat(indent) + line).join('\n');
+  });
+  const sections = [`# ${document.title}`, `Date: ${document.date}`, ...blocks];
   if (document.warnings.length) sections.push('## Export notes', ...document.warnings.map(w => `- ${w}`));
   return new TextEncoder().encode(sections.join('\n\n') + '\n');
 }
