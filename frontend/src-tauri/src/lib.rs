@@ -797,6 +797,7 @@ pub fn run() {
             audio::system_audio_commands::start_system_audio_monitoring,
             audio::system_audio_commands::stop_system_audio_monitoring,
             audio::system_audio_commands::get_system_audio_monitoring_status,
+            audio::meeting_observer::get_meeting_audio_snapshot,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,

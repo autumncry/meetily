@@ -7,6 +7,7 @@ import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { MeetingDetectionSettings } from '@/components/MeetingDetectionSettings';
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -235,6 +236,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           onCheckedChange={handleNotificationToggle}
         />
       </div>
+
+      <MeetingDetectionSettings />
 
       {/* Device Preferences */}
       <div className="space-y-4">
