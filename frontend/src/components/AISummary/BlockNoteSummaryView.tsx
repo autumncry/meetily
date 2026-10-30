@@ -31,6 +31,7 @@ interface BlockNoteSummaryViewProps {
 export interface BlockNoteSummaryViewRef {
   saveSummary: () => Promise<void>;
   getMarkdown: () => Promise<string>;
+  getExportSummary: () => unknown;
   isDirty: boolean;
 }
 
@@ -80,6 +81,11 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   const [currentBlocks, setCurrentBlocks] = useState<Block[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const isContentLoaded = useRef(false);
+  const latestBlocksRef = useRef<Block[] | null>(null);
+
+  useEffect(() => {
+    latestBlocksRef.current = null;
+  }, [summaryData, meeting?.id]);
 
   // Create BlockNote editor for markdown parsing
   const editor = useCreateBlockNote({
@@ -119,6 +125,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   }, [format, data?.summary_json]);
 
   const handleEditorChange = useCallback((blocks: Block[]) => {
+    latestBlocksRef.current = blocks;
     // Only set dirty flag if content has finished loading
     if (isContentLoaded.current) {
       setCurrentBlocks(blocks);
@@ -167,6 +174,10 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
     saveSummary: handleSave,
+    getExportSummary: () => {
+      if (latestBlocksRef.current !== null) return { summary_json: latestBlocksRef.current };
+      return summaryData;
+    },
     getMarkdown: async () => {
       try {
         console.log('🔍 getMarkdown called, format:', format);
@@ -215,7 +226,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
       }
     },
     isDirty
-  }), [handleSave, isDirty, editor, format, currentBlocks, data]);
+  }), [handleSave, isDirty, editor, format, currentBlocks, data, summaryData]);
 
   // Render legacy format
   if (format === 'legacy') {
@@ -261,9 +272,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
             editor={editor}
             editable={true}
             onChange={() => {
-              if (isContentLoaded.current) {
-                handleEditorChange(editor.document);
-              }
+              handleEditorChange(editor.document);
             }}
             theme="light"
           />

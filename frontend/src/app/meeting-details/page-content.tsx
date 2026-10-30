@@ -18,6 +18,9 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useExportOperations } from '@/hooks/meeting-details/useExportOperations';
+import { ExportControl } from '@/components/MeetingDetails/ExportControl';
+import { hasVisibleSummaryContent } from '@/lib/summary-content';
 
 export default function PageContent({
   meeting,
@@ -76,6 +79,12 @@ export default function PageContent({
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
   const templates = useTemplates();
+  const exportOperations = useExportOperations({
+    meeting,
+    meetingTitle: meetingData.meetingTitle,
+    aiSummary: meetingData.aiSummary,
+    blockNoteSummaryRef: meetingData.blockNoteSummaryRef,
+  });
 
   // Callback to register the modal open function
   const handleRegisterModalOpen = (openFn: () => void) => {
@@ -192,6 +201,12 @@ export default function PageContent({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen min-w-0 bg-gray-50"
     >
+      <ExportControl
+        hasSummary={hasVisibleSummaryContent(meetingData.aiSummary)}
+        hasTranscript={(totalCount ?? meetingData.transcripts.length) > 0}
+        {...exportOperations}
+        onExport={exportOperations.exportMeeting}
+      />
       <div className="flex flex-1 min-w-0 overflow-hidden">
         <MeetingDetailsSplitView
           activeTab={activeTab}
