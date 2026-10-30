@@ -1,12 +1,22 @@
 import { DocumentBlock, Inline, MeetingDocument, plainText } from './model';
 
+function inlineCode(value: string): string {
+  // Code spans display line endings as spaces; canonicalize before escaping
+  // surrounding blocks so their contents cannot become block-level syntax.
+  value = value.replace(/\r\n?|\n/g, ' ');
+  const fence = '`'.repeat(Math.max(1, ...(value.match(/`+/g) || []).map(run => run.length + 1)));
+  // CommonMark removes one boundary space only when both ends have spaces
+  // and the content is not entirely spaces. Pad backticks to keep fences apart.
+  const pad = /^`|`$/.test(value) || /^ .* $/.test(value) && /[^ ]/.test(value) ? ' ' : '';
+  return fence + pad + value + pad + fence;
+}
+
 function runsToMarkdown(runs: Inline[]): string {
   return runs.map(r => {
-    if (!r.text.trim()) return r.text;
-    const leading = r.text.match(/^\s*/)?.[0] || '';
-    const trailing = r.text.trim() ? r.text.match(/\s*$/)?.[0] || '' : '';
-    let text = r.text.trim().replace(/([\\`*_\[\]<>])/g, '\\$1');
-    if (r.code) text = '`' + r.text.trim().replace(/`/g, '\\`') + '`';
+    if (!r.text || !r.code && !r.text.trim()) return r.text;
+    const leading = r.code ? '' : r.text.match(/^\s*/)?.[0] || '';
+    const trailing = r.code ? '' : r.text.match(/\s*$/)?.[0] || '';
+    let text = r.code ? inlineCode(r.text) : r.text.trim().replace(/([\\`*_\[\]<>~#&])/g, '\\$1');
     if (r.bold) text = `**${text}**`;
     if (r.italic) text = `*${text}*`;
     if (r.strike) text = `~~${text}~~`;
@@ -14,8 +24,17 @@ function runsToMarkdown(runs: Inline[]): string {
     return leading + text + trailing;
   }).join('');
 }
+
+function blockText(runs: Inline[]): string {
+  // Apply block-context protection after joining runs: an ordinal and its
+  // punctuation may come from different editor spans. Generated list/heading
+  // markers and table separators are added only after this literal-text step.
+  return runsToMarkdown(runs)
+    .replace(/^( {0,3}\d{1,9})([.)])(?=\s|$)/gm, '$1\\$2')
+    .replace(/^( {0,3})([-+=])/gm, '$1\\$2');
+}
 function blockMarkdown(block: DocumentBlock): string {
-  const text = runsToMarkdown(block.runs);
+  const text = blockText(block.runs);
   switch (block.kind) {
     case 'heading': return `${'#'.repeat(block.level || 1)} ${text}`;
     case 'list': return text;

@@ -47,11 +47,13 @@ function blockNoteBlocks(values: unknown[], warnings: string[], depth = 0): Docu
   let ordered = 0;
   return values.flatMap(value => {
     const n = object(value);
+    // Each sibling array owns its counter; children cannot advance the parent.
+    if (n.type !== 'numberedListItem') ordered = 0;
     const runs = blockInline(n.content);
     let block: DocumentBlock = { kind: 'paragraph', runs, depth };
     switch (n.type) {
       case 'heading': block = { ...block, kind: 'heading', level: Math.min(6, Math.max(1, Number(n.props?.level) || 1)) }; break;
-      case 'bulletListItem': ordered = 0; block = { ...block, kind: 'list', marker: '•' }; break;
+      case 'bulletListItem': block = { ...block, kind: 'list', marker: '•' }; break;
       case 'numberedListItem': ordered = Number(n.props?.start) || ordered + 1; block = { ...block, kind: 'list', marker: `${ordered}.` }; break;
       case 'checkListItem': block = { ...block, kind: 'list', marker: n.props?.checked ? '[x]' : '[ ]' }; break;
       case 'table': block = { ...block, kind: 'table', rows: (n.content?.rows || []).map((r: Node) => (r.cells || []).map((cell: unknown) => blockInline(object(cell).content ?? cell))) }; break;

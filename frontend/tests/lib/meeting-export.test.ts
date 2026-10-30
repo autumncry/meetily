@@ -30,6 +30,119 @@ describe('meeting exports', () => {
     const expected = parse(markdown).children.filter(n => n.type === 'list').map(shape);
     expect(actual).toEqual(expected);
   });
+  test('structured numbered lists restart after every non-numbered sibling in all adapters', async () => {
+    const numbered = (text: string) => ({ type: 'numberedListItem', content: [{ text }] });
+    const separators = [
+      { type: 'heading', props: { level: 2 }, content: [{ text: 'Separator heading' }] },
+      { type: 'paragraph', content: [{ text: 'Separator paragraph' }] },
+      { type: 'checkListItem', props: { checked: true }, content: [{ text: 'Separator checklist' }] },
+      { type: 'table', content: { rows: [{ cells: [[{ text: 'Separator table' }]] }] } },
+    ];
+    const blocks = ['A', 'B', 'C', 'D', 'E'].flatMap((group, index) => [
+      ...(index ? [separators[index - 1]] : []), numbered(`Group ${group} one`), numbered(`Group ${group} two`),
+    ]);
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { summary_json: blocks } });
+    expect(document.blocks.filter(b => /^\d+\.$/.test(b.marker || '')).map(b => b.marker)).toEqual(['1.', '2.', '1.', '2.', '1.', '2.', '1.', '2.', '1.', '2.']);
+    const markdown = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    const ast = unified().use(remarkParse).use(remarkGfm).parse(markdown);
+    expect(ast.children.flatMap(n => n.type === 'list' && n.ordered ? [n.start] : [])).toEqual([1, 1, 1, 1, 1]);
+
+    const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
+    const options = { fonts: { cjk: fonts[0], emoji: fonts[1] } };
+    const zip = await JSZip.loadAsync((await renderMeetingDocument(document, 'docx', options)).bytes);
+    const xml = await zip.file('word/document.xml')!.async('string');
+    const numbering = await zip.file('word/numbering.xml')!.async('string');
+    const paragraphs = xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
+    const ids = paragraphs.filter(p => /Group [A-E] (one|two)/.test(p)).map(p => /<w:numId w:val="(\d+)"/.exec(p)![1]);
+    expect(ids).toHaveLength(10);
+    expect(new Set(ids).size).toBe(5);
+    for (let i = 0; i < ids.length; i += 2) {
+      expect(ids[i]).toBe(ids[i + 1]);
+      const abstractId = new RegExp(`<w:num w:numId="${ids[i]}"><w:abstractNumId w:val="(\\d+)"`).exec(numbering)![1];
+      const definition = new RegExp(`<w:abstractNum w:abstractNumId="${abstractId}"[\\s\\S]*?</w:abstractNum>`).exec(numbering)![0];
+      expect(definition).toMatch(/<w:lvl w:ilvl="0"[^>]*><w:start w:val="1"/);
+    }
+    if (Bun.which('pdftotext')) {
+      const directory = await mkdtemp(join(tmpdir(), 'meetily-list-reset-'));
+      try {
+        const path = join(directory, 'lists.pdf');
+        await writeFile(path, (await renderMeetingDocument(document, 'pdf', options)).bytes);
+        const text = execFileSync('pdftotext', ['-layout', path, '-'], { encoding: 'utf8' });
+        expect([...text.matchAll(/([12])\.\s+Group ([A-E]) (one|two)/g)].map(m => m.slice(1))).toEqual([
+          ['1', 'A', 'one'], ['2', 'A', 'two'], ['1', 'B', 'one'], ['2', 'B', 'two'], ['1', 'C', 'one'],
+          ['2', 'C', 'two'], ['1', 'D', 'one'], ['2', 'D', 'two'], ['1', 'E', 'one'], ['2', 'E', 'two'],
+        ]);
+      } finally { await rm(directory, { recursive: true, force: true }); }
+    }
+  }, 60000);
+
+  test('structured numbered lists retain explicit starts and independent nested counters', async () => {
+    const item = (text: string, start?: number, children?: unknown[]) => ({ type: 'numberedListItem', props: { start }, content: [{ text }], children });
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { summary_json: [
+      item('Parent seven', 7, [item('Child three', 3), item('Child four'), { type: 'paragraph', content: 'Child separator' }, item('Child one'), item('Child two')]),
+      item('Parent eight', undefined, [item('Fresh child one'), item('Fresh child two')]),
+      item('Explicit restart', 1), item('After restart'),
+    ] } });
+    expect(document.blocks.filter(b => b.kind === 'list').map(b => [b.depth, b.marker])).toEqual([
+      [0, '7.'], [1, '3.'], [1, '4.'], [1, '1.'], [1, '2.'], [0, '8.'], [1, '1.'], [1, '2.'], [0, '1.'], [0, '2.'],
+    ]);
+  });
+
+  test.each([
+    '# literal heading marker', '10. literal paragraph', '10) literal paragraph', '- literal bullet', '+ literal bullet',
+    '---', 'Text\n===', 'Text\n# literal second line', '~~literal tildes~~', '`literal backticks`',
+    'A | B\n--- | ---\nC | D', 'literal &copy; entity',
+  ])('Markdown preserves structured literal paragraph text on AST round-trip: %s', async value => {
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { summary_json: [{ type: 'paragraph', content: [{ text: value }] }] } });
+    const markdown = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    const nodes = unified().use(remarkParse).use(remarkGfm).parse(markdown).children.slice(3);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe('paragraph');
+    expect((nodes[0] as any).children.map((n: any) => ({ type: n.type, value: n.value }))).toEqual([{ type: 'text', value }]);
+  });
+
+  test.each(['a`b', '`edge', 'edge`', '``', 'a``b```c', ' padded ', '  ', ' ordinary', 'trailing '])('Markdown preserves inline code delimiters and spaces on AST round-trip: %s', async value => {
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { summary_json: [{ type: 'paragraph', content: [{ text: 'Code: ' }, { text: value, styles: { code: true } }] }] } });
+    const markdown = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    const nodes = unified().use(remarkParse).use(remarkGfm).parse(markdown).children.slice(3);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe('paragraph');
+    expect((nodes[0] as any).children.map((n: any) => ({ type: n.type, value: n.value }))).toEqual([{ type: 'text', value: 'Code: ' }, { type: 'inlineCode', value }]);
+  });
+
+  test('Markdown normalizes code-span line endings without escaping their literal block markers', async () => {
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { summary_json: [
+      { type: 'paragraph', content: [{ text: 'Code: ' }, { text: 'a\n- b\r\n10. c', styles: { code: true } }] },
+    ] } });
+    const markdown = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    const paragraph: any = unified().use(remarkParse).use(remarkGfm).parse(markdown).children.at(-1);
+    expect(paragraph.type).toBe('paragraph');
+    expect(paragraph.children.map((n: any) => ({ type: n.type, value: n.value }))).toEqual([
+      { type: 'text', value: 'Code: ' }, { type: 'inlineCode', value: 'a - b 10. c' },
+    ]);
+  });
+
+  test('Markdown AST input retains literal text alongside real links, styles, tables and nested lists', async () => {
+    const markdown = [
+      '\\# literal heading', '', '10\\. literal paragraph with \\~\\~tildes\\~\\~', '',
+      '## Real heading', '', '3. **Bold** and [link](https://example.invalid/path)',
+      '   - ~~Strike~~ and ``a`b``', '4. Last item', '',
+      '| Header | Code |', '| --- | --- |', '| Literal \\| pipe | ``a`b\\|c`` |',
+    ].join('\n');
+    const parse = (value: string) => unified().use(remarkParse).use(remarkGfm).parse(value);
+    const shape = (node: any): any => ({
+      type: node.type,
+      ...(node.value !== undefined ? { value: node.value } : {}),
+      ...(node.depth !== undefined ? { depth: node.depth } : {}),
+      ...(node.url !== undefined ? { url: node.url } : {}),
+      ...(node.type === 'list' ? { ordered: node.ordered, start: node.start } : {}),
+      ...(node.children ? { children: node.children.map(shape) } : {}),
+    });
+    const document = buildMeetingDocument({ ...meeting, content: 'summary', summary: { markdown } });
+    const exported = new TextDecoder().decode((await renderMeetingDocument(document, 'md')).bytes);
+    expect(parse(exported).children.slice(3).map(shape)).toEqual(parse(markdown).children.map(shape));
+  });
+
   test('retains every ordered transcript, Unicode, title and recording timestamps', async () => {
     const doc = buildMeetingDocument({ ...meeting, transcripts: [...transcripts].reverse(), content: 'transcript' });
     const out = await renderMeetingDocument(doc, 'md');
