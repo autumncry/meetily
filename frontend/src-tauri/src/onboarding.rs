@@ -196,13 +196,11 @@ pub async fn complete_onboarding<R: Runtime>(
 
     // Preserve an existing choice when setup is deferred. A fresh personal
     // installation defaults to multilingual Whisper; no model is downloaded here.
-    if !defer_models || SettingsRepository::get_transcript_config(pool).await
-        .map_err(|e| format!("Failed to read transcription config: {}", e))?.is_none() {
-        let (provider, transcript_model) = if defer_models {
-            ("whisper", crate::config::DEFAULT_WHISPER_MODEL)
-        } else {
-            ("parakeet", crate::config::DEFAULT_PARAKEET_MODEL)
-        };
+    if defer_models {
+        SettingsRepository::ensure_default_transcript_config(pool).await
+            .map_err(|e| format!("Failed to set default transcription config: {}", e))?;
+    } else {
+        let (provider, transcript_model) = ("parakeet", crate::config::DEFAULT_PARAKEET_MODEL);
         if let Err(e) = SettingsRepository::save_transcript_config(
             pool, provider, transcript_model,
         ).await {

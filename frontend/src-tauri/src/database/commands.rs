@@ -205,12 +205,7 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     }
 
     // Select a default without downloading any model.
-    let (transcript_provider, transcript_model) = crate::config::default_transcript_model();
-    if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_transcript_config(
-        pool,
-        transcript_provider,
-        transcript_model,
-    ).await {
+    if let Err(e) = crate::database::repositories::setting::SettingsRepository::ensure_default_transcript_config(pool).await {
         error!("Failed to set default transcription model config: {}", e);
     }
 

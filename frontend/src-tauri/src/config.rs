@@ -15,7 +15,7 @@ pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 /// downloading it remains an explicit action in Settings.
 pub fn default_transcript_model() -> (&'static str, &'static str) {
     if cfg!(feature = "personal-mac") {
-        ("whisper", DEFAULT_WHISPER_MODEL)
+        ("localWhisper", DEFAULT_WHISPER_MODEL)
     } else {
         ("parakeet", DEFAULT_PARAKEET_MODEL)
     }

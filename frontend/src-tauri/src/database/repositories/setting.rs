@@ -24,6 +24,54 @@ pub struct SaveTranscriptConfigRequest {
 
 pub struct SettingsRepository;
 
+#[cfg(all(test, feature = "personal-mac"))]
+mod personal_default_tests {
+    use super::*;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE transcript_settings (id TEXT PRIMARY KEY, provider TEXT, model TEXT, whisperApiKey TEXT, deepgramApiKey TEXT, elevenLabsApiKey TEXT, groqApiKey TEXT, openaiApiKey TEXT)")
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn fresh_and_deferred_setup_share_a_canonical_persisted_default() {
+        let pool = pool().await;
+        SettingsRepository::ensure_default_transcript_config(&pool).await.unwrap();
+        let config = SettingsRepository::get_transcript_config(&pool).await.unwrap().unwrap();
+        assert_eq!(config.provider, "localWhisper");
+        assert_eq!(config.model, "large-v3-turbo");
+        // The native API-key contract must also accept the provider.
+        assert!(SettingsRepository::get_transcript_api_key(&pool, &config.provider).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn deferred_setup_preserves_existing_provider_model_and_keys() {
+        let pool = pool().await;
+        sqlx::query("INSERT INTO transcript_settings (id, provider, model, groqApiKey) VALUES ('1', 'groq', 'user-model', 'synthetic-test-key')")
+            .execute(&pool).await.unwrap();
+        SettingsRepository::ensure_default_transcript_config(&pool).await.unwrap();
+        let config = SettingsRepository::get_transcript_config(&pool).await.unwrap().unwrap();
+        assert_eq!(config.provider, "groq");
+        assert_eq!(config.model, "user-model");
+        assert_eq!(config.groq_api_key.as_deref(), Some("synthetic-test-key"));
+    }
+
+    #[tokio::test]
+    async fn repairs_only_the_invalid_alias_without_changing_model_or_keys() {
+        let pool = pool().await;
+        sqlx::query("INSERT INTO transcript_settings (id, provider, model, whisperApiKey) VALUES ('1', 'whisper', 'small-q5_1', 'synthetic-test-key')")
+            .execute(&pool).await.unwrap();
+        let config = SettingsRepository::get_transcript_config(&pool).await.unwrap().unwrap();
+        assert_eq!(config.provider, "localWhisper");
+        assert_eq!(config.model, "small-q5_1");
+        assert_eq!(config.whisper_api_key.as_deref(), Some("synthetic-test-key"));
+        let persisted: String = sqlx::query_scalar("SELECT provider FROM transcript_settings WHERE id = '1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(persisted, "localWhisper");
+    }
+}
+
 // Transcript providers: localWhisper, deepgram, elevenLabs, groq, openai
 // Summary providers: openai, claude, ollama, groq, added openrouter
 // NOTE: Handle data exclusion in the higher layer as this is database abstraction layer(using SELECT *)
@@ -146,8 +194,28 @@ impl SettingsRepository {
             sqlx::query_as::<_, TranscriptSetting>("SELECT * FROM transcript_settings LIMIT 1")
                 .fetch_optional(pool)
                 .await?;
+        // Repair only the invalid alias emitted by early personal builds. Keep
+        // the selected model/API keys and all other providers unchanged. The
+        // condition also prevents overwriting a concurrent user selection.
+        #[cfg(feature = "personal-mac")]
+        if let Some(config) = &setting {
+            if config.provider == "whisper" {
+                sqlx::query("UPDATE transcript_settings SET provider = 'localWhisper' WHERE id = $1 AND provider = 'whisper'")
+                    .bind(&config.id).execute(pool).await?;
+                return sqlx::query_as::<_, TranscriptSetting>("SELECT * FROM transcript_settings WHERE id = $1")
+                    .bind(&config.id).fetch_optional(pool).await;
+            }
+        }
         Ok(setting)
 
+    }
+
+    /// Shared by fresh setup and deferred setup. Never replaces a user choice.
+    pub async fn ensure_default_transcript_config(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let (provider, model) = crate::config::default_transcript_model();
+        sqlx::query("INSERT INTO transcript_settings (id, provider, model) SELECT '1', $1, $2 WHERE NOT EXISTS (SELECT 1 FROM transcript_settings) ON CONFLICT(id) DO NOTHING")
+            .bind(provider).bind(model).execute(pool).await?;
+        Ok(())
     }
 
     pub async fn save_transcript_config(
