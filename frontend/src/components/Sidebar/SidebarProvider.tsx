@@ -6,6 +6,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
+import type { DetectionStartRequest } from '@/lib/detection-start-request';
 
 
 
@@ -45,7 +46,8 @@ interface SidebarContextType {
   setMeetings: (meetings: CurrentMeeting[]) => void;
   isMeetingActive: boolean;
   setIsMeetingActive: (active: boolean) => void;
-  handleRecordingToggle: () => void;
+  handleRecordingToggle: (request?: DetectionStartRequest) => void;
+  takeDetectionStartRequest: () => DetectionStartRequest | null;
   searchTranscripts: (query: string) => Promise<void>;
   searchResults: TranscriptSearchResult[];
   isSearching: boolean;
@@ -86,6 +88,13 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [serverAddress, setServerAddress] = useState('');
   const [transcriptServerAddress, setTranscriptServerAddress] = useState('');
   const summaryPollsRef = React.useRef(new Map<string, SummaryPoll>());
+  const pendingDetectionStart = React.useRef<DetectionStartRequest | null>(null);
+  const takeDetectionStartRequest = React.useCallback(() => {
+    const request = pendingDetectionStart.current;
+    pendingDetectionStart.current = null;
+    return request;
+  }, []);
+  useEffect(() => () => { pendingDetectionStart.current?.cancel(); }, []);
 
   // Use recording state from RecordingStateContext (single source of truth)
   const { isRecording } = useRecordingState();
@@ -154,17 +163,25 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   }, [meetings]);
 
   // Function to handle recording toggle from sidebar
-  const handleRecordingToggle = () => {
+  const handleRecordingToggle = (request?: DetectionStartRequest) => {
+    if (request && (!request.isValid() || isRecording)) { request.cancel(); return; }
     if (!isRecording) {
       // Check if already on home page
       if (pathname === '/') {
         // Already on home - trigger recording directly via custom event
         console.log('Triggering recording from sidebar (already on home page)');
-        window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
+        window.dispatchEvent(new CustomEvent('start-recording-from-sidebar', { detail: request }));
       } else {
-        // Not on home - navigate and use auto-start mechanism
-        console.log('Navigating to home page with auto-start flag');
-        sessionStorage.setItem('autoStartRecording', 'true');
+        // Not on home - navigate and hand the request to its start flow.
+        console.log('Navigating to home page for recording start');
+        if (request) {
+          // Detection requests must not survive a reload or become manual starts.
+          pendingDetectionStart.current?.cancel();
+          pendingDetectionStart.current = request;
+          void request.done.then(() => {
+            if (pendingDetectionStart.current === request) pendingDetectionStart.current = null;
+          });
+        } else sessionStorage.setItem('autoStartRecording', 'true');
         router.push('/');
       }
 
@@ -306,6 +323,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       isMeetingActive,
       setIsMeetingActive,
       handleRecordingToggle,
+      takeDetectionStartRequest,
       searchTranscripts,
       searchResults,
       isSearching,

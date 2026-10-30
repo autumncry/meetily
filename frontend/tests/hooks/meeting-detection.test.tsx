@@ -5,6 +5,9 @@ const originalCore = { ...await import('@tauri-apps/api/core') };
 const originalStore = { ...await import('@tauri-apps/plugin-store') };
 const originalNav = { ...await import('next/navigation') };
 const originalState = { ...await import('../../src/contexts/RecordingStateContext') };
+const originalConfig = { ...await import('../../src/contexts/ConfigContext') };
+const originalTranscripts = { ...await import('../../src/contexts/TranscriptContext') };
+const originalNotification = { ...await import('../../src/lib/recordingNotification') };
 const savedGlobals = { window: globalThis.window, sessionStorage: globalThis.sessionStorage, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
 let path = '/';
 let navigation: string[] = [];
@@ -17,10 +20,16 @@ let nativeRecording = false;
 let nativeDeferred: Promise<any> | null = null;
 let snapshotDeferred: Promise<any> | null = null;
 let snapshotFailure = false;
+let modelReadiness: Promise<boolean> | null = null;
+let homeMounted = false;
 let apps = [{ bundleId: 'com.electron.lark', pids: [42], inputActive: true, outputActive: true }];
 mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke: async (command: string, args?: { allowedBundleIds?: string[] }) => {
   commands.push(command);
   if (command === 'api_get_meetings') return [];
+  if (command === 'api_get_transcript_config') return { provider: 'parakeet' };
+  if (command === 'parakeet_init') return;
+  if (command === 'parakeet_has_available_models') return modelReadiness ?? true;
+  if (command === 'start_recording_with_devices_and_meeting') { nativeRecording = true; return; }
   if (command === 'get_meeting_audio_snapshot') {
     if (!Array.isArray(args?.allowedBundleIds)) throw new Error('Snapshot allowlist was not provided');
     if (snapshotFailure) throw new Error('unavailable');
@@ -34,10 +43,19 @@ mock.module('@tauri-apps/plugin-store', () => ({ ...originalStore, Store: { load
   return { get: async () => preference, set: async (_key: string, value: unknown) => { preference = value; }, save: async () => { if (saveFailures-- > 0) throw new Error('disk full'); } };
 } } }));
 mock.module('next/navigation', () => ({ ...originalNav, usePathname: () => path, useRouter: () => ({ push: (route: string) => { navigation.push(route); } }) }));
-mock.module('../../src/contexts/RecordingStateContext', () => ({ ...originalState, useRecordingState: () => recording }));
+mock.module('../../src/contexts/RecordingStateContext', () => ({ ...originalState, useRecordingState: () => ({ ...recording, setStatus: (status: typeof recording.status) => { recording.status = status; } }) }));
+mock.module('../../src/contexts/ConfigContext', () => ({ ...originalConfig, useConfig: () => ({ selectedDevices: { micDevice: null, systemDevice: null } }) }));
+mock.module('../../src/contexts/TranscriptContext', () => ({ ...originalTranscripts, useTranscripts: () => ({ clearTranscripts: () => {}, setMeetingTitle: () => {} }) }));
+mock.module('../../src/lib/recordingNotification', () => ({ ...originalNotification, showRecordingNotification: async () => {} }));
 const { SidebarProvider } = await import('../../src/components/Sidebar/SidebarProvider');
 const { MeetingDetectionProvider, useMeetingDetection } = await import('../../src/contexts/MeetingDetectionProvider');
 const { MeetingDetectionSettings } = await import('../../src/components/MeetingDetectionSettings');
+const { useRecordingStart } = await import('../../src/hooks/useRecordingStart');
+let manualStart: () => Promise<void>;
+function HomeStart() {
+  manualStart = useRecordingStart(recording.isRecording, value => { recording.isRecording = value; }).handleRecordingStart;
+  return null;
+}
 let context: ReturnType<typeof useMeetingDetection>;
 function Harness() { context = useMeetingDetection(); return <MeetingDetectionSettings />; }
 let renderer: ReactTestRenderer | null = null;
@@ -47,7 +65,7 @@ let timers = new Map<number, () => void>();
 let timeSpy: ReturnType<typeof spyOn>;
 let startEvents = 0;
 let session = new Map<string, string>();
-function tree(ready = true) { return <SidebarProvider><MeetingDetectionProvider ready={ready}><Harness /></MeetingDetectionProvider></SidebarProvider>; }
+function tree(ready = true) { return <SidebarProvider><MeetingDetectionProvider ready={ready}><Harness />{homeMounted && <HomeStart />}</MeetingDetectionProvider></SidebarProvider>; }
 async function mount(ready = true) { await act(async () => { renderer = create(tree(ready)); }); }
 async function tick(seconds = 1) {
   for (let i = 0; i < seconds; i++) {
@@ -60,10 +78,16 @@ function button(label: string) { return renderer!.root.findAllByType('button').f
 beforeEach(() => {
   path = '/'; navigation = []; commands = []; preference = { mode: 'ask', allowedBundleIds: ['com.electron.lark'] };
   loadFailure = false; saveFailures = 0; nativeRecording = false; nativeDeferred = null; snapshotDeferred = null; snapshotFailure = false;
+  modelReadiness = null; homeMounted = false;
   recording = { isRecording: false, isPaused: false, status: originalState.RecordingStatus.IDLE };
   apps = [{ bundleId: 'com.electron.lark', pids: [42], inputActive: true, outputActive: true }];
   now = 0; timerId = 0; timers = new Map(); startEvents = 0; session = new Map();
-  const events = new EventTarget(); events.addEventListener('start-recording-from-sidebar', () => startEvents++);
+  const events = new EventTarget(); events.addEventListener('start-recording-from-sidebar', event => {
+    startEvents++;
+    // Earlier boundary tests stop at Sidebar dispatch; the handoff integration
+    // cases below mount the real home hook and let it settle the request.
+    if (!homeMounted) (event as CustomEvent).detail?.finish();
+  });
   globalThis.window = events as unknown as Window & typeof globalThis;
   globalThis.sessionStorage = {
     setItem: (key, value) => { session.set(key, value); },
@@ -87,6 +111,9 @@ afterAll(() => {
   mock.module('@tauri-apps/plugin-store', () => originalStore);
   mock.module('next/navigation', () => originalNav);
   mock.module('../../src/contexts/RecordingStateContext', () => originalState);
+  mock.module('../../src/contexts/ConfigContext', () => originalConfig);
+  mock.module('../../src/contexts/TranscriptContext', () => originalTranscripts);
+  mock.module('../../src/lib/recordingNotification', () => originalNotification);
 });
 test('Off default, invalid preferences, failed load and incomplete onboarding do not observe', async () => {
   preference = undefined; await mount(); expect(context.preferences.mode).toBe('off'); expect(commands).not.toContain('get_meeting_audio_snapshot');
@@ -114,10 +141,15 @@ test('double click on home uses the existing Sidebar start event only once', asy
   expect(commands.some(c => c.startsWith('start_recording') || c.startsWith('stop_recording'))).toBe(false);
   await tick(6); expect(button('Start recording')).toBeUndefined();
 });
-test('start on another route uses existing Sidebar navigation/start signal', async () => {
+test('start on another route hands the in-memory request to the real home flow', async () => {
   path = '/settings'; await mount(); await tick(5);
-  await act(async () => { await button('Start recording')!.props.onClick(); });
-  expect(navigation).toEqual(['/']); expect(session.get('autoStartRecording')).toBe('true'); expect(startEvents).toBe(0);
+  let click!: Promise<void>;
+  await act(async () => { click = button('Start recording')!.props.onClick(); });
+  expect(navigation).toEqual(['/']); expect(session.get('autoStartRecording')).toBeUndefined(); expect(startEvents).toBe(0);
+  path = '/'; homeMounted = true;
+  await act(async () => { renderer!.update(tree()); });
+  await act(async () => { await click; });
+  expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
 });
 test('native already-recording state suppresses start even if React state is stale', async () => {
   await mount(); await tick(5); nativeRecording = true;
@@ -225,4 +257,57 @@ test('unmount while querying discards late activity and never leaves a poll time
   await mount(); expect(commands).toContain('get_meeting_audio_snapshot');
   await act(async () => { renderer!.unmount(); }); renderer = null;
   await act(async () => { resolve(apps); }); expect(timers.size).toBe(0); expect(startEvents).toBe(0);
+});
+
+for (const route of ['/', '/settings']) {
+  test(`valid confirmed request on ${route} holds its handoff lock through readiness and captures once`, async () => {
+    path = route; homeMounted = route === '/'; await mount(); await tick(5);
+    let resolve!: (value: boolean) => void; modelReadiness = new Promise(done => { resolve = done; });
+    let click!: Promise<void>; let settled = false;
+    const start = button('Start recording')!.props.onClick;
+    await act(async () => { click = start(); void click.then(() => { settled = true; }); void start(); });
+    if (route !== '/') {
+      path = '/'; homeMounted = true;
+      await act(async () => { renderer!.update(tree()); });
+    }
+    expect(commands).toContain('parakeet_has_available_models');
+    expect(settled).toBe(false);
+    expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(0);
+    await act(async () => { resolve(true); await click; });
+    expect(settled).toBe(true);
+    expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+  });
+  for (const cancellation of ['off', 'dispose', 'busy'] as const) {
+    test(`confirmed reminder on ${route} cannot capture after ${cancellation} while real home readiness is pending`, async () => {
+      path = route; homeMounted = route === '/'; await mount(); await tick(5);
+      let resolve!: (value: boolean) => void; modelReadiness = new Promise(done => { resolve = done; });
+      let click!: Promise<void>; let settled = false;
+      await act(async () => { click = button('Start recording')!.props.onClick(); void click.then(() => { settled = true; }); });
+      if (route !== '/') {
+        path = '/'; homeMounted = true;
+        await act(async () => { renderer!.update(tree()); });
+      }
+      expect(commands).toContain('parakeet_has_available_models');
+      if (cancellation === 'off') await act(async () => { await context.updatePreferences({ ...context.preferences, mode: 'off' }); });
+      if (cancellation === 'dispose') { await act(async () => { renderer!.unmount(); }); renderer = null; }
+      if (cancellation === 'busy') {
+        recording.status = originalState.RecordingStatus.STOPPING;
+        await act(async () => { renderer!.update(tree()); });
+      }
+      expect(settled).toBe(false);
+      await act(async () => { resolve(true); await click; });
+      expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(0);
+      expect(commands.some(command => command.startsWith('stop_recording'))).toBe(false);
+    });
+  }
+}
+
+test('an ordinary manual start remains valid when detection is turned Off during readiness', async () => {
+  homeMounted = true; await mount();
+  let resolve!: (value: boolean) => void; modelReadiness = new Promise(done => { resolve = done; });
+  let start!: Promise<void>; await act(async () => { start = manualStart(); });
+  await act(async () => { await context.updatePreferences({ ...context.preferences, mode: 'off' }); });
+  await act(async () => { resolve(true); await start; });
+  expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+  expect(commands.some(command => command.startsWith('stop_recording'))).toBe(false);
 });

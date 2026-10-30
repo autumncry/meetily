@@ -474,7 +474,7 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={handleRecordingToggle}
+                onClick={() => handleRecordingToggle()}
                 disabled={isRecording}
                 className={`p-2 ${isRecording ? 'bg-red-500 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-full transition-colors duration-150 shadow-sm`}
               >
@@ -775,7 +775,7 @@ const Sidebar: React.FC = () => {
 
           <div className="flex-shrink-0 p-2 border-t border-gray-100">
             <button
-              onClick={handleRecordingToggle}
+              onClick={() => handleRecordingToggle()}
               disabled={isRecording}
               className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white ${isRecording ? 'bg-red-300 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-lg transition-colors shadow-sm`}
             >

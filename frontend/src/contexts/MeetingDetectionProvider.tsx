@@ -3,6 +3,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { toast } from 'sonner';
 import { DEFAULT_DETECTION_PREFERENCES, DETECTION_APPS, DetectionPreferences, AudioActivity, MeetingDetectionPolicy, parseDetectionPreferences } from '@/lib/meeting-detection';
 import { MeetingDetectionPoller } from '@/lib/meeting-detection-poller';
+import { DetectionStartRequest } from '@/lib/detection-start-request';
 import { DetectionSaveError, meetingDetectionService } from '@/services/meetingDetectionService';
 import { recordingService } from '@/services/recordingService';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -39,6 +40,7 @@ export function MeetingDetectionProvider({ children, ready }: { children: React.
   const mounted = useRef(false);
   const saveLock = useRef(false);
   const startLock = useRef(false);
+  const startRequest = useRef<DetectionStartRequest | null>(null);
   const epoch = useRef(0);
   const reminderRef = useRef<string | null>(null);
   const lastSample = useRef<{ apps: AudioActivity[]; at: number } | null>(null);
@@ -77,7 +79,7 @@ export function MeetingDetectionProvider({ children, ready }: { children: React.
     }).catch(() => {
       if (!cancelled) setError('Could not load meeting detection settings. Detection is Off.');
     }).finally(() => { if (!cancelled) setLoaded(true); });
-    return () => { cancelled = true; mounted.current = false; ++epoch.current; poller.current!.stop(); };
+    return () => { cancelled = true; mounted.current = false; ++epoch.current; startRequest.current?.cancel(); poller.current!.stop(); };
   }, []);
 
   const allowedKey = preferences.allowedBundleIds.join('|');
@@ -88,15 +90,16 @@ export function MeetingDetectionProvider({ children, ready }: { children: React.
     policy.current.suspend();
     if (active) { setHealth('checking'); poller.current!.start(); }
     else { setHealth('off'); poller.current!.stop(); }
-    return () => { ++epoch.current; poller.current!.stop(); };
+    return () => { ++epoch.current; startRequest.current?.cancel(); poller.current!.stop(); };
   }, [active, allowedKey, settingsRevision]);
 
-  useEffect(() => { if (busy) dismiss(); }, [busy]);
+  useEffect(() => { if (busy) { dismiss(); startRequest.current?.cancel(); } }, [busy]);
 
   const updatePreferences = async (next: DetectionPreferences) => {
     if (saveLock.current || !loaded) return;
     saveLock.current = true;
     ++epoch.current;
+    startRequest.current?.cancel();
     poller.current!.stop();
     dismiss();
     setSaving(true); setError(null);
@@ -125,6 +128,7 @@ export function MeetingDetectionProvider({ children, ready }: { children: React.
     if (startLock.current || saveLock.current || reminderRef.current !== bundleId || !current.current.active || current.current.busy) return;
     startLock.current = true;
     const generation = epoch.current;
+    let request: DetectionStartRequest | null = null;
     dismiss(); // Consume immediately; failed starts remain manual retries.
     try {
       const state = await recordingService.getRecordingState();
@@ -135,10 +139,23 @@ export function MeetingDetectionProvider({ children, ready }: { children: React.
         || !sample || performance.now() - sample.at > 3000) return;
       // The existing Sidebar action reaches the home model/device/readiness flow
       // on every route. Detection never invokes native recording start or stop.
-      current.current.handleRecordingToggle();
+      request = new DetectionStartRequest(() => {
+        const sample = lastSample.current;
+        const app = sample?.apps.find(app => app.bundleId === bundleId);
+        return mounted.current && generation === epoch.current && current.current.active && !saveLock.current
+          && !current.current.busy && !nativeBusy.current && !!app?.inputActive && !!app.outputActive
+          && !!sample && performance.now() - sample.at <= 3000;
+      });
+      startRequest.current = request;
+      current.current.handleRecordingToggle(request);
+      await request.done;
     } catch {
       if (mounted.current && generation === epoch.current) toast.error('Could not check recording state. Please start recording manually.');
-    } finally { startLock.current = false; }
+    } finally {
+      request?.finish();
+      if (startRequest.current === request) startRequest.current = null;
+      startLock.current = false;
+    }
   };
 
   return <Context.Provider value={{ preferences, loaded, saving, error, health, updatePreferences }}>
