@@ -138,7 +138,8 @@ export interface PaginatedTranscriptsResponse {
 export interface TranscriptSegmentData {
   speakerLabel?: string;
   id: string;
-  timestamp: number; // audio_start_time in seconds
+  timestamp: number; // Display time in seconds; may fall back to 0 for legacy rows
+  sourceStartTime?: number; // Original optional audio_start_time, without a display fallback
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;

@@ -57,12 +57,16 @@ export function TranscriptPanel({
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
-      return segments.map(s=>({...s,speakerLabel:intervalLabel(speakerRun,s.timestamp,s.endTime)}));
+      return segments.map(s => ({
+        ...s,
+        speakerLabel: intervalLabel(speakerRun, s.sourceStartTime, s.endTime),
+      }));
     }
     // Convert transcripts to segments for virtualization
     return transcripts.map(t => ({
       id: t.id,
       timestamp: t.audio_start_time ?? 0,
+      sourceStartTime: t.audio_start_time ?? undefined,
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
