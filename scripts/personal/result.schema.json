@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meetily:local-diarization:v1",
+  "title": "Local anonymous diarization output",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "meetily.local-diarization.v1"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error"
+      ]
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "source_sha256",
+        "decoded_f32le_sha256",
+        "source_duration_seconds",
+        "start_seconds",
+        "duration_seconds",
+        "sample_rate_hz",
+        "channels"
+      ],
+      "properties": {
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "decoded_f32le_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "start_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "sample_rate_hz": {
+          "const": 16000
+        },
+        "channels": {
+          "const": 1
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "required": [
+        "segmentation",
+        "embedding"
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "required": [
+        "provider",
+        "threads",
+        "requested_speakers",
+        "cluster_threshold"
+      ],
+      "properties": {
+        "requested_speakers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "provider": {
+          "const": "cpu"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "python",
+        "platform",
+        "sherpa_onnx",
+        "sherpa_onnx_core",
+        "numpy"
+      ]
+    },
+    "timing": {
+      "type": "object",
+      "required": [
+        "decode_seconds",
+        "model_init_seconds",
+        "inference_seconds",
+        "total_seconds",
+        "inference_real_time_factor"
+      ]
+    },
+    "resources": {
+      "type": "object",
+      "required": [
+        "process_peak_rss_bytes"
+      ]
+    },
+    "validation": {
+      "type": "object",
+      "required": [
+        "finite_sorted_valid_bounds",
+        "bounds_start_seconds",
+        "bounds_end_seconds",
+        "turn_count",
+        "speaker_count"
+      ]
+    },
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end",
+          "speaker"
+        ],
+        "properties": {
+          "start": {
+            "type": "number",
+            "minimum": 0
+          },
+          "end": {
+            "type": "number",
+            "minimum": 0
+          },
+          "speaker": {
+            "type": "string",
+            "pattern": "^speaker-[0-9]{2,}$"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "type"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input",
+          "models",
+          "configuration",
+          "environment",
+          "timing",
+          "resources",
+          "validation",
+          "turns"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      }
+    }
+  ]
+}

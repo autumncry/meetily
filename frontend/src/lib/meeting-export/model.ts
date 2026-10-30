@@ -14,7 +14,7 @@ export interface DocumentBlock {
   rows?: Inline[][][];
 }
 export interface MeetingDocument { title: string; date: string; content: ExportContent; blocks: DocumentBlock[]; warnings: string[] }
-export interface ExportTranscript { id?: string; text: string; timestamp?: string; audio_start_time?: number; sequence_id?: number; chunk_start_time?: number }
+export interface ExportTranscript { id?: string; text: string; timestamp?: string; audio_start_time?: number; audio_end_time?: number; sequence_id?: number; chunk_start_time?: number; speakerLabel?: string }
 export interface MeetingDocumentInput { title: string; date: string; content: ExportContent; summary?: unknown; transcripts?: ExportTranscript[] }
 
 // External editor/legacy JSON is checked at this boundary, rather than cast to a
@@ -148,7 +148,7 @@ export function buildMeetingDocument(input: MeetingDocumentInput): MeetingDocume
     for (const { t } of transcripts) {
       const seconds = t.audio_start_time ?? t.chunk_start_time;
       const timestamp = seconds != null && Number.isFinite(seconds) ? formatTimestamp(seconds) : t.timestamp;
-      blocks.push({ kind: 'paragraph', runs: [{ text: timestamp ? `[${timestamp}] ` : '', bold: true }, { text: t.text }] });
+      blocks.push({ kind: 'paragraph', runs: [{ text: (timestamp ? `[${timestamp}] ` : '') + (t.speakerLabel ? t.speakerLabel + ': ' : ''), bold: true }, { text: t.text }] });
     }
   }
   return { title: input.title || 'Meeting', date: input.date, content: input.content, blocks, warnings: [...new Set(warnings)] };

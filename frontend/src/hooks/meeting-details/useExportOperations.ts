@@ -7,15 +7,18 @@ import type { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSu
 import type { PaginatedTranscriptsResponse } from '@/types';
 import { buildMeetingDocument, ExportContent, ExportFormat, renderMeetingDocument, safeFilename } from '@/lib/meeting-export';
 import { collectAllTranscripts, saveMeetingExport } from '@/lib/meeting-export/save';
+import { labelTranscripts, SpeakerRun } from '@/lib/speakers';
 
 interface ExportProps {
   meeting: { id: string; created_at: string };
   meetingTitle: string;
   aiSummary: unknown;
   blockNoteSummaryRef: RefObject<BlockNoteSummaryViewRef>;
+  speakerRun?: SpeakerRun;
+  loadSpeakerRun?: () => Promise<SpeakerRun | undefined>;
 }
 
-export function useExportOperations({ meeting, meetingTitle, aiSummary, blockNoteSummaryRef }: ExportProps) {
+export function useExportOperations({ meeting, meetingTitle, aiSummary, blockNoteSummaryRef, speakerRun, loadSpeakerRun }: ExportProps) {
   const running = useRef(false);
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState('');
@@ -30,8 +33,9 @@ export function useExportOperations({ meeting, meetingTitle, aiSummary, blockNot
     try {
       // Snapshot the latest visible editor content before async transcript reads.
       const summary = content !== 'transcript' ? blockNoteSummaryRef.current?.getExportSummary() ?? aiSummary : undefined;
+      const currentSpeakers = content !== 'summary' && loadSpeakerRun ? await loadSpeakerRun() : speakerRun;
       const transcripts = content !== 'summary' ? await collectAllTranscripts(offset => invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', { meetingId: meeting.id, limit: 500, offset })) : [];
-      const document = buildMeetingDocument({ title: meetingTitle, date: meeting.created_at, summary, transcripts, content });
+      const document = buildMeetingDocument({ title: meetingTitle, date: meeting.created_at, summary, transcripts: labelTranscripts(transcripts, currentSpeakers), content });
       let warnings: string[] = [];
       const result = await saveMeetingExport({
         filename: safeFilename(meetingTitle, format),

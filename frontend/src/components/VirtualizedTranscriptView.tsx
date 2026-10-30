@@ -65,6 +65,7 @@ function cleanStopWords(text: string): string {
 
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
+    speakerLabel,
     id,
     timestamp,
     text,
@@ -72,6 +73,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isStreaming,
     showConfidence,
 }: {
+    speakerLabel?: string;
     id: string;
     timestamp: number;
     text: string;
@@ -97,6 +99,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speakerLabel && <p className="text-xs font-medium text-gray-500 mb-1">{speakerLabel}</p>}
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
@@ -290,6 +293,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                     }}
                                 >
                                     <TranscriptSegment
+                                        speakerLabel={segment.speakerLabel}
                                         id={segment.id}
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
@@ -346,6 +350,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                     transition={{ duration: 0.15 }}
                                 >
                                     <TranscriptSegment
+                                        speakerLabel={segment.speakerLabel}
                                         id={segment.id}
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}

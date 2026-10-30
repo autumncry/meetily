@@ -21,6 +21,8 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useExportOperations } from '@/hooks/meeting-details/useExportOperations';
 import { ExportControl } from '@/components/MeetingDetails/ExportControl';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
+import { useSpeakers, SpeakerView } from '@/hooks/meeting-details/useSpeakers';
+import { SpeakersPanel } from '@/components/MeetingDetails/SpeakersPanel';
 
 export default function PageContent({
   meeting,
@@ -79,11 +81,17 @@ export default function PageContent({
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
   const templates = useTemplates();
+  const speakers = useSpeakers(meeting.id);
   const exportOperations = useExportOperations({
     meeting,
     meetingTitle: meetingData.meetingTitle,
     aiSummary: meetingData.aiSummary,
     blockNoteSummaryRef: meetingData.blockNoteSummaryRef,
+    speakerRun: speakers.activeRun,
+    loadSpeakerRun: async () => {
+      const current = await invoke<SpeakerView>('speaker_view', { meetingId: meeting.id });
+      return current.snapshot.runs.find(run => run.id === current.snapshot.active_id);
+    },
   });
 
   // Callback to register the modal open function
@@ -216,6 +224,8 @@ export default function PageContent({
           }}
           transcript={
             <TranscriptPanel
+              speakerRun={speakers.activeRun}
+              speakersPanel={<SpeakersPanel key={meeting.id} controller={speakers} isRecording={isRecording}/>}
               transcripts={meetingData.transcripts}
               customPrompt={customPrompt}
               onPromptChange={setCustomPrompt}

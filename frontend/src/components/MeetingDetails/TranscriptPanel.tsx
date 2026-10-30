@@ -4,9 +4,12 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { useMemo, ReactNode } from 'react';
+import { intervalLabel, SpeakerRun } from '@/lib/speakers';
 
 interface TranscriptPanelProps {
+  speakerRun?: SpeakerRun;
+  speakersPanel?: ReactNode;
   transcripts: Transcript[];
   customPrompt: string;
   onPromptChange: (value: string) => void;
@@ -31,6 +34,8 @@ interface TranscriptPanelProps {
 }
 
 export function TranscriptPanel({
+  speakerRun,
+  speakersPanel,
   transcripts,
   customPrompt,
   onPromptChange,
@@ -52,7 +57,7 @@ export function TranscriptPanel({
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
-      return segments;
+      return segments.map(s=>({...s,speakerLabel:intervalLabel(speakerRun,s.timestamp,s.endTime)}));
     }
     // Convert transcripts to segments for virtualization
     return transcripts.map(t => ({
@@ -61,8 +66,9 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speakerLabel: intervalLabel(speakerRun,t.audio_start_time,t.audio_end_time),
     }));
-  }, [transcripts, usePagination, segments]);
+  }, [transcripts, usePagination, segments, speakerRun]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
@@ -79,6 +85,7 @@ export function TranscriptPanel({
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}
+      {speakersPanel}
       <div className="flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}

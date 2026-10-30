@@ -6,6 +6,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import type { BlockNoteSummaryViewRef } from '../../src/components/AISummary/BlockNoteSummaryView';
+import type { SpeakerRun } from '../../src/lib/speakers';
 
 const originalCore = { ...await import('@tauri-apps/api/core') };
 const originalDialog = { ...await import('@tauri-apps/plugin-dialog') };
@@ -17,7 +18,8 @@ afterAll(() => {
   mock.module('@tauri-apps/plugin-fs', () => originalFs);
   mock.module('sonner', () => originalToast);
 });
-const rows = Array.from({ length: 503 }, (_, i) => ({ id: `${i}`, text: `完整记录 ${i}`, audio_start_time: i, timestamp: '' }));
+const rows = Array.from({ length: 503 }, (_, i) => ({ id: `${i}`, text: `完整记录 ${i}`, audio_start_time: i, audio_end_time: i+1, timestamp: '' }));
+let latestSpeakers: SpeakerRun | undefined;
 let path: string | null;
 let writeError: Error | null;
 let written: Uint8Array | null;
@@ -37,17 +39,27 @@ let hook: ReturnType<typeof useExportOperations>;
 let renderer: ReactTestRenderer;
 const ref = createRef<BlockNoteSummaryViewRef>();
 function Harness() {
-  hook = useExportOperations({ meeting: { id: 'test', created_at: '2026-10-30' }, meetingTitle: '导出测试', aiSummary: { markdown: 'Old summary' }, blockNoteSummaryRef: ref });
+  hook = useExportOperations({ meeting: { id: 'test', created_at: '2026-10-30' }, meetingTitle: '导出测试', aiSummary: { markdown: 'Old summary' }, blockNoteSummaryRef: ref, loadSpeakerRun: async()=>latestSpeakers });
   return null;
 }
 beforeEach(async () => {
   path = '/tmp/export.md'; writeError = null; written = null; success.mockClear();
+  latestSpeakers = undefined;
   (ref as any).current = { getExportSummary: () => ({ summary_json: [{ type: 'paragraph', content: [{ text: 'Live edited summary' }] }] }) };
   await act(async () => { renderer = create(<Harness />); });
 });
 afterEach(async () => { await act(async () => renderer.unmount()); });
 
 describe('export hook integration', () => {
+  test('reads the current active names at export time and preserves every source row', async () => {
+    latestSpeakers = {id:'r',meeting_id:'test',created_at:'today',audio_hash:'a',requested_speakers:2,duration:600,
+      turns:[{start:0,end:600,speaker:'speaker-01'}],overlay:{names:{'speaker-01':'当前名字'},aliases:{},undo:[]}};
+    await act(async () => { await hook.exportMeeting('md', 'transcript'); });
+    const text = new TextDecoder().decode(written!);
+    expect(text).toContain('当前名字');
+    expect(text).toContain('00:08:22');
+    expect(text.match(/完整记录 /g)).toHaveLength(503);
+  });
   test('exports latest editor contents and every transcript page using the production renderer', async () => {
     await act(async () => { await hook.exportMeeting('md', 'both'); });
     const text = new TextDecoder().decode(written!);

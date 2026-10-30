@@ -50,6 +50,7 @@ pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
 pub mod state;
+pub mod speakers;
 pub mod summary;
 pub mod tray;
 pub mod utils;
@@ -474,6 +475,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
+        .manage(speakers::runtime::Jobs::default())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
@@ -831,6 +833,10 @@ pub fn run() {
             audio::retranscription::cancel_retranscription_command,
             audio::retranscription::is_retranscription_in_progress_command,
             // Import audio commands
+            speakers::runtime::speaker_view,
+            speakers::runtime::speaker_start,
+            speakers::runtime::speaker_cancel,
+            speakers::runtime::speaker_edit,
             audio::import::select_and_validate_audio_command,
             audio::import::validate_audio_file_command,
             audio::import::start_import_audio_command,
@@ -846,6 +852,7 @@ pub fn run() {
                     tray::focus_main_window(_app_handle);
                 }
                 tauri::RunEvent::Exit => {
+                    if let Some(jobs) = _app_handle.try_state::<speakers::runtime::Jobs>() { jobs.shutdown(); }
                     log::info!("Application exiting, cleaning up resources...");
                     tauri::async_runtime::block_on(async {
                         // Clean up database connection and checkpoint WAL

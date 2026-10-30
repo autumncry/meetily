@@ -136,6 +136,7 @@ export interface PaginatedTranscriptsResponse {
 
 // Transcript segment data for virtualized display
 export interface TranscriptSegmentData {
+  speakerLabel?: string;
   id: string;
   timestamp: number; // audio_start_time in seconds
   endTime?: number; // audio_end_time in seconds

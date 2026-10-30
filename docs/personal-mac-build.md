@@ -56,3 +56,8 @@ available, and deferring setup preserves existing summary-provider settings.
 Microphone/system-audio permissions are requested through the existing recording
 flow when needed. The configure-later path does not grant permissions or imply
 that a real recording was tested.
+
+Optional post-meeting speaker analysis uses a separately configured local Python
+and ONNX runtime. Follow [speaker setup and repair](personal-speakers-runtime.md)
+once, then open **Speakers** in a saved meeting's transcript panel. Analyze never
+downloads dependencies and requires an explicit participant count.
