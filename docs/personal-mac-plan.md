@@ -18,7 +18,7 @@
 - Preserve reference inputs; Plaud labels are comparison data, not human gold truth.
 - Implement exports first, meeting detection second, speaker work last.
 - Keep MIT notices; use public APIs and appropriately licensed dependencies.
-- Default detection Off; auto-stop must only stop recordings started by the detector.
+- Default detection Off; reminders offer one-click start through the existing flow, with manual stop only.
 - Optional diarization is accepted only with real audio evidence; failed experiments may be omitted as explicitly authorized.
 
 ## Review Focus
@@ -26,7 +26,7 @@
 - A long Chinese meeting exports every segment, including those beyond the UI page, without dropped characters or unreadable glyphs.
 - A summary edited immediately before export uses the visible edited content and preserves headings, lists and tables.
 - Cancelled save dialogs, failed writes and unsupported content must not report successful exports.
-- Repeated activity events, manual stop, silence and navigation must not create duplicate or unsaved recordings.
+- Repeated activity events, silence and navigation must not create duplicate reminders or recordings.
 - Re-running transcription/diarization must not silently discard manual speaker corrections.
 
 ### Task 1: Local document exports
@@ -41,15 +41,15 @@
 - [ ] Run targeted and existing frontend tests, TypeScript and production build. Generate short and long local reference exports under parent `Validation/exports`; structurally check text completeness and visually inspect rendered PDF/DOCX.
 - [ ] Commit source/fixtures only; no private data, model weights or generated reference exports. Record commands and limitations in `Work/task-1-report.md`.
 
-### Task 2: Meeting detection and reliable automatic recording
+### Task 2: Meeting detection reminders
 
-**Files:** Extend `frontend/src-tauri/src/audio/system_detector.rs` and related command/state modules as necessary. Create a pure detection policy and tests; create frontend detector provider/hook/settings. Modify the existing start/stop coordination only where needed to ensure the detector uses the same persistence-complete flow as manual recording.
+**Files:** Add or extend the macOS audio observation and related command/state modules. Create a pure detection policy and tests; create a frontend detector provider/hook/settings. Reuse the existing home-page start action rather than introducing native background recording control.
 
-**Interfaces:** Native observation emits app identity and active input/output observations without content. Policy consumes observations, mode and current recording ownership; produces ask/start/stop/suppress decisions. All actions route through one UI recording workflow or a shared completion coordinator, not bare native stop. Settings persist mode and allowlist locally.
+**Interfaces:** Native observation returns app identity and active input/output observations without content. Policy consumes observations, enabled state and whether a recording is already active; produces one reminder per activity session. Clicking start routes through the existing home-page start flow. Settings persist enablement and allowlist locally. Native polling/observation must have real cancellation and not leak listeners/threads on toggles.
 
-- [ ] Add failing tests for stable activity, deduplicated reminders, non-meeting playback, self-exclusion, manual-stop suppression, ending grace period, paused/manual recordings, disabled mode and detector cleanup.
-- [ ] Add explicit Off/Ask/Automatic settings with Off default. Observe a small configurable allowlist; disclose browser-app granularity. Ask presents a visible start action. Automatic owns only sessions it starts.
-- [ ] Ensure stopping waits for final transcripts and saves once, including navigation and duplicate-event cases. Show recording/detection status and interruptions.
+- [ ] Add failing tests for stable activity, deduplicated reminders, non-meeting playback, self-exclusion, session-ending grace period, paused/manual recordings, disabled mode and observer cleanup.
+- [ ] Add explicit enable/disable settings with Off default. Observe a small configurable allowlist; disclose browser-app granularity. Reminders present a visible start action and dismiss option.
+- [ ] Reuse manual start/readiness validation and manual stop/persistence. Repeated clicks must not initiate duplicate starts; reminders must not appear while already recording or paused.
 - [ ] Run native policy tests, frontend orchestration tests, Rust check/build and UI interaction checks; distinguish mocked state tests from actual OS/process observation. Record what was tested on this Mac.
 - [ ] Commit and record verification in `Work/task-2-report.md`.
 

@@ -7,8 +7,8 @@ The project root is the parent of this repository. Ref contains private Plaud au
 ## Required behavior
 
 1. Export a meeting summary, transcript, or both to UTF-8 Markdown, editable DOCX, and searchable PDF. Export full transcripts rather than only visible/paginated rows. Preserve Chinese text, timestamps, title, and supported summary structure. Use the latest visible editor contents. Show save/cancel/failure state; no success toast on cancellation. Keep rendering local and bundle needed font assets.
-2. Detect likely meetings on macOS using an explicit application allowlist and native audio-process activity. Offer Off, Ask, and Automatic modes; default Off. Ask offers one-click recording; Automatic starts only after stable activity and may stop only recordings it owns, after a grace period. Manual stop suppresses restarting within the same activity session. Exclude our own audio activity. Keep visible status and manual control. Do not promise detection of every browser tab or every meeting application.
-3. Preserve complete meeting data when automated recording stops, including final transcript segments. Handle duplicate events, navigation, paused state, app restarts and detector disposal without duplicate recordings or silently unsaved meetings.
+2. Detect likely meetings on macOS using an explicit application allowlist and native audio-process activity. Offer Off and Ask modes; default Off. Ask presents a reminder with one-click start through the existing recording workflow. Recording ends manually. Suppress repeated reminders during the same activity session, exclude our own audio activity, and keep visible status/manual control. Do not promise detection of every browser tab or every meeting application.
+3. Preserve the existing manual recording completion flow. Detection and reminder actions must handle duplicate events, navigation, already-active/paused recordings, app restarts and observer disposal without duplicate recordings. Unattended automatic start/stop is outside this iteration because the user asked for detection, not unattended recording.
 4. Attempt speaker separation after recording using a real local model or validated local service; ordinary text LLM output is not speaker ground truth. Support stable meeting-local speaker IDs, display-name editing, merging and correction persistence. Reference Plaud text is a comparison artifact, not a human-verified gold dataset. If acoustic separation cannot be validated, do not expose it as working; report the limitation and retain verified export/detection work. No paid cloud API calls or private audio uploads are needed for this work.
 
 ## Implementation decisions
@@ -17,7 +17,7 @@ The project root is the parent of this repository. Ref contains private Plaud au
 - Keep a separate app identity for this personal build and disable upstream auto-update replacement. Preserve local official-app data.
 - Prefer independent document adapters behind one normalized document model. Markdown is not the only source for rich structure.
 - Keep detection policy pure and testable, with native observation separated from recording orchestration.
-- Reuse the current persistence workflow where safe; unify completion before adding automated stop.
+- Reuse the existing UI recording workflow for the reminder's start action; do not add automated stop or a second persistence path.
 - Build an ad-hoc-signed local .app for this Mac, with a reproducible project-local build/run script.
 
 ## Acceptance
