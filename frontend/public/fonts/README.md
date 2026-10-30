@@ -8,7 +8,10 @@ Bundled local export fonts (SIL Open Font License 1.1; licenses alongside files)
 - `NotoSansJP-Regular.ttf`: Noto Sans JP Regular, static `wght=400` instance from
   https://github.com/google/fonts/blob/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf
   (`NotoSansJP-LICENSE.txt`), a PDF fallback for supplementary Han glyphs missing
-  from Noto Sans SC, including U+20BB7 (𠮷). It is embedded as a used-glyph subset.
+  from Noto Sans SC, including U+20BB7 (𠮷). It is embedded only when needed.
+  In that case both CJK fonts are embedded completely: fontkit's combined-CJK
+  subsetting can yield invisible glyphs despite correct searchable text. Ordinary
+  documents retain the compact SC subset and do not embed the JP fallback.
 
 Downloaded 2026-10-30. PDF embeds a CJK used-glyph subset and the complete emoji
 font (the latter avoids invisible emoji in fontkit's subset output). DOCX embeds the complete

@@ -12,13 +12,21 @@ export async function renderPdf(document: MeetingDocument, fonts: ExportFonts): 
   pdf.setTitle(document.title);
   pdf.setAuthor('Meetily Personal');
   pdf.setSubject(`Meeting date: ${document.date}`);
-  // Static TrueType fonts are deliberate: fontkit's CID-keyed CFF subsetting
-  // can produce searchable text with missing visible CJK glyphs in PDF readers.
-  const cjk = await pdf.embedFont(fonts.cjk, { subset: true });
+  const cjkChars = new Set(fontkit.create(fonts.cjk).characterSet);
+  const emojiChars = new Set(fontkit.create(fonts.emoji).characterSet);
+  const sourceText = [document.title, document.date, ...document.warnings, ...document.blocks.flatMap(block => [block.marker || '', ...block.runs.map(run => run.text), ...(block.rows?.flat(2).map(run => run.text) || [])])].join('');
+  const needsOtherFont = new Set(Array.from(sourceText.replace(/\r\n?/g, '\n')).filter(char => char !== '\n' && !cjkChars.has(char.codePointAt(0)!) && !emojiChars.has(char.codePointAt(0)!)));
+  const fallbackChars = new Set(needsOtherFont.size && fonts.hanFallback ? fontkit.create(fonts.hanFallback).characterSet : []);
+  const unsupported = [...needsOtherFont].filter(char => !fallbackChars.has(char.codePointAt(0)!));
+  if (unsupported.length) throw new Error(`PDF cannot preserve character ${unsupported.slice(0, 5).map(char => `U+${char.codePointAt(0)!.toString(16).toUpperCase()}`).join(', ')} with the bundled fonts. Choose Markdown or DOCX to retain the original text.`);
+
+  // Ordinary documents keep the verified compact SC subset. When rare Han
+  // text needs a second CJK font, both CJK fonts use complete static TrueType:
+  // fontkit's multiple-CJK subset output can extract correctly while rendering
+  // invisible glyphs. Do not embed the fallback at all when it is unused.
+  const cjk = await pdf.embedFont(fonts.cjk, { subset: needsOtherFont.size === 0 });
   const emoji = await pdf.embedFont(fonts.emoji, { subset: false });
-  const hanFallback = fonts.hanFallback ? await pdf.embedFont(fonts.hanFallback, { subset: true }) : null;
-  const cjkChars = new Set(cjk.getCharacterSet()), emojiChars = new Set(emoji.getCharacterSet());
-  const fallbackChars = new Set(hanFallback?.getCharacterSet() || []);
+  const hanFallback = needsOtherFont.size && fonts.hanFallback ? await pdf.embedFont(fonts.hanFallback, { subset: false }) : null;
   const warnings = [...document.warnings];
   let page: PDFPage;
   let y = 0;

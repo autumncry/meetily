@@ -105,8 +105,8 @@ describe('meeting exports', () => {
 
   test('real DOCX is editable XML and real PDF embeds fonts with multiple pages', async () => {
     const doc = buildMeetingDocument({ ...meeting, content: 'transcript', transcripts });
-    const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
-    const options = { fonts: { cjk: fonts[0], emoji: fonts[1] } };
+    const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf', 'NotoSansJP-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
+    const options = { fonts: { cjk: fonts[0], emoji: fonts[1], hanFallback: fonts[2] } };
     const word = await renderMeetingDocument(doc, 'docx', options);
     expect([...word.bytes.slice(0, 2)]).toEqual([80, 75]);
     const zip = await JSZip.loadAsync(word.bytes);
@@ -117,6 +117,7 @@ describe('meeting exports', () => {
     expect(Object.keys(zip.files).filter(name => name.endsWith('.odttf'))).toHaveLength(2);
     const pdf = await renderMeetingDocument(doc, 'pdf', options);
     expect(new TextDecoder().decode(pdf.bytes.slice(0, 8))).toContain('%PDF-');
+    expect(pdf.bytes.length).toBeLessThan(2_000_000);
     const { PDFDocument } = await import('pdf-lib');
     expect((await PDFDocument.load(pdf.bytes)).getPageCount()).toBeGreaterThan(3);
   }, 60000);
@@ -155,7 +156,7 @@ describe('meeting exports', () => {
 
   test.skipIf(!Bun.which('pdftotext'))('PDF preserves rare Han names in its searchable Unicode text', async () => {
     const fonts = await Promise.all(['NotoSansSC-Regular.ttf', 'NotoEmoji-Regular.ttf', 'NotoSansJP-Regular.ttf'].map(n => readFile(new URL(`../../public/fonts/${n}`, import.meta.url))));
-    const document = buildMeetingDocument({ ...meeting, content: 'transcript', transcripts: [{ text: '参会人：𠮷田', audio_start_time: 0 }] });
+    const document = buildMeetingDocument({ ...meeting, title: '𠮷中', content: 'transcript', transcripts: [{ text: '参会人：𠮷田', audio_start_time: 0 }] });
     const result = await renderMeetingDocument(document, 'pdf', { fonts: { cjk: fonts[0], emoji: fonts[1], hanFallback: fonts[2] } });
     const directory = await mkdtemp(join(tmpdir(), 'meetily-rare-han-test-'));
     try {
@@ -164,6 +165,26 @@ describe('meeting exports', () => {
       const text = execFileSync('pdftotext', ['-layout', path, '-'], { encoding: 'utf8' });
       expect(text).toContain('𠮷田');
       expect(text).not.toContain('[U+20BB7]');
+      if (Bun.which('pdftoppm')) {
+        // Correct ToUnicode mappings alone can conceal an invisible subset
+        // font. At 72 dpi these are the two 20-point title-glyph boxes. Require
+        // visible ink for BOTH the rare fallback glyph and the ordinary CJK
+        // glyph next to it, without depending on an exact anti-aliasing image.
+        const ppm = execFileSync('pdftoppm', ['-r', '72', '-f', '1', '-singlefile', path], { maxBuffer: 4_000_000 });
+        const header = /^P6\n(\d+) (\d+)\n255\n/.exec(ppm.subarray(0, 64).toString('ascii'))!;
+        expect(header).not.toBeNull();
+        const width = Number(header[1]), offset = header[0].length;
+        const ink = (left: number, right: number) => {
+          let count = 0;
+          for (let y = 60; y < 85; y++) for (let x = left; x < right; x++) {
+            const p = offset + (y * width + x) * 3;
+            if (ppm[p] + ppm[p + 1] + ppm[p + 2] < 600) count++;
+          }
+          return count;
+        };
+        expect(ink(49, 67)).toBeGreaterThan(20);
+        expect(ink(69, 87)).toBeGreaterThan(20);
+      }
     } finally { await rm(directory, { recursive: true, force: true }); }
   }, 60000);
 
