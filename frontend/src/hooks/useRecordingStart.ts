@@ -283,11 +283,15 @@ export function useRecordingStart(
 
   useEffect(() => {
     const request = takeDetectionStartRequest();
-    if (request) { void startFromSidebar(request, 'sidebar_auto'); return; }
-    if (typeof window !== 'undefined' && sessionStorage.getItem('autoStartRecording') === 'true'
-      && !isRecording && !isAutoStarting) {
-      sessionStorage.removeItem('autoStartRecording');
-      void startFromSidebar(undefined, 'sidebar_auto');
+    const manualPending = typeof window !== 'undefined' && sessionStorage.getItem('autoStartRecording') === 'true';
+    // Consume both representations together. A separate explicit manual click
+    // wins over detection, and neither intent may remain queued after completion.
+    if (manualPending) sessionStorage.removeItem('autoStartRecording');
+    if (manualPending) {
+      request?.cancel();
+      if (!isRecording && !isAutoStarting) void startFromSidebar(undefined, 'sidebar_auto');
+    } else if (request) {
+      void startFromSidebar(request, 'sidebar_auto');
     }
   }, [takeDetectionStartRequest, startFromSidebar, isRecording, isAutoStarting]);
 

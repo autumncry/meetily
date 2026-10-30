@@ -47,7 +47,7 @@ mock.module('../../src/contexts/RecordingStateContext', () => ({ ...originalStat
 mock.module('../../src/contexts/ConfigContext', () => ({ ...originalConfig, useConfig: () => ({ selectedDevices: { micDevice: null, systemDevice: null } }) }));
 mock.module('../../src/contexts/TranscriptContext', () => ({ ...originalTranscripts, useTranscripts: () => ({ clearTranscripts: () => {}, setMeetingTitle: () => {} }) }));
 mock.module('../../src/lib/recordingNotification', () => ({ ...originalNotification, showRecordingNotification: async () => {} }));
-const { SidebarProvider } = await import('../../src/components/Sidebar/SidebarProvider');
+const { SidebarProvider, useSidebar } = await import('../../src/components/Sidebar/SidebarProvider');
 const { MeetingDetectionProvider, useMeetingDetection } = await import('../../src/contexts/MeetingDetectionProvider');
 const { MeetingDetectionSettings } = await import('../../src/components/MeetingDetectionSettings');
 const { useRecordingStart } = await import('../../src/hooks/useRecordingStart');
@@ -57,7 +57,8 @@ function HomeStart() {
   return null;
 }
 let context: ReturnType<typeof useMeetingDetection>;
-function Harness() { context = useMeetingDetection(); return <MeetingDetectionSettings />; }
+let sidebarStart: () => void;
+function Harness() { context = useMeetingDetection(); sidebarStart = useSidebar().handleRecordingToggle; return <MeetingDetectionSettings />; }
 let renderer: ReactTestRenderer | null = null;
 let now = 0;
 let timerId = 0;
@@ -310,4 +311,54 @@ test('an ordinary manual start remains valid when detection is turned Off during
   await act(async () => { resolve(true); await start; });
   expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
   expect(commands.some(command => command.startsWith('stop_recording'))).toBe(false);
+});
+
+for (const order of ['manual-first', 'detector-first']) {
+  for (const disableDetection of [false, true]) {
+    test(`${order} navigation intents coalesce once${disableDetection ? ' even after detection is disabled' : ''} and never replay after completion`, async () => {
+      path = '/settings'; await mount(); await tick(5);
+      let click!: Promise<void>;
+      if (order === 'manual-first') await act(async () => { sidebarStart(); });
+      await act(async () => { click = button('Start recording')!.props.onClick(); });
+      if (order === 'detector-first') await act(async () => { sidebarStart(); });
+      if (disableDetection) await act(async () => { await context.updatePreferences({ ...context.preferences, mode: 'off' }); });
+      path = '/'; homeMounted = true;
+      await act(async () => { renderer!.update(tree()); });
+      await act(async () => { await click; });
+      expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+      // Simulate the existing recording flow's normal completion, without invoking
+      // capture/stop in the OS. A consumed navigation flag must not start again.
+      nativeRecording = false;
+      recording = { isRecording: false, isPaused: false, status: originalState.RecordingStatus.IDLE };
+      await act(async () => { renderer!.update(tree()); });
+      await tick(2);
+      expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+      expect(session.get('autoStartRecording')).toBeUndefined();
+    });
+  }
+}
+
+test('a single manual Sidebar navigation starts once and cannot replay after completion', async () => {
+  path = '/settings'; await mount();
+  await act(async () => { sidebarStart(); });
+  path = '/'; homeMounted = true;
+  await act(async () => { renderer!.update(tree()); });
+  expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+  nativeRecording = false;
+  recording = { isRecording: false, isPaused: false, status: originalState.RecordingStatus.IDLE };
+  await act(async () => { renderer!.update(tree()); });
+  await tick(2);
+  expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(1);
+  expect(session.get('autoStartRecording')).toBeUndefined();
+});
+
+test('an invalid detector-only navigation intent never becomes a manual start', async () => {
+  path = '/settings'; await mount(); await tick(5);
+  let click!: Promise<void>;
+  await act(async () => { click = button('Start recording')!.props.onClick(); });
+  await act(async () => { await context.updatePreferences({ ...context.preferences, mode: 'off' }); });
+  path = '/'; homeMounted = true;
+  await act(async () => { renderer!.update(tree()); await click; });
+  expect(commands.filter(command => command === 'start_recording_with_devices_and_meeting')).toHaveLength(0);
+  expect(session.get('autoStartRecording')).toBeUndefined();
 });
