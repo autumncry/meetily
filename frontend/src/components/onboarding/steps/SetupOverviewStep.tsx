@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/tooltip";
 
 export function SetupOverviewStep() {
-  const { goNext } = useOnboarding();
+  const { goNext, completeOnboarding } = useOnboarding();
   const [isMac, setIsMac] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const checkPlatform = async () => {
@@ -43,10 +45,23 @@ export function SetupOverviewStep() {
     goNext();
   };
 
+  const handleConfigureLater = async () => {
+    if (isCompleting) return;
+    setIsCompleting(true);
+    setError(null);
+    try {
+      await completeOnboarding({ configureLater: true });
+      window.location.reload();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not finish setup. Please try again.');
+      setIsCompleting(false);
+    }
+  };
+
   return (
     <OnboardingContainer
       title="Setup Overview"
-      description="Meetily requires that you download the Transcription & Summarization AI models for the software to work."
+      description="Choose local model downloads now, or open the app and configure models later in Settings."
       step={2}
       totalSteps={isMac ? 4 : 3}
     >
@@ -90,12 +105,24 @@ export function SetupOverviewStep() {
 
         {/* CTA Section */}
         <div className="w-full max-w-xs space-y-4">
+          <p className="text-sm text-gray-600">
+            For Chinese transcription, choose multilingual Whisper in Settings.
+            Parakeet does not support Chinese. The download option below installs
+            Parakeet (~640 MB) and a recommended local summary model (about 1–3 GB).
+            You can also configure your own summary API in Settings.
+          </p>
+          <Button onClick={handleConfigureLater} disabled={isCompleting} className="w-full h-auto min-h-11 whitespace-normal">
+            {isCompleting ? 'Opening…' : 'Configure models later — open without downloading'}
+          </Button>
           <Button
             onClick={handleContinue}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            disabled={isCompleting}
+            variant="outline"
+            className="w-full h-auto min-h-11 whitespace-normal"
           >
-            Let's Go
+            Download Parakeet + summary models
           </Button>
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           <div className="text-center">
             <a
               href="https://github.com/Zackriya-Solutions/meeting-minutes"

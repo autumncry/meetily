@@ -34,7 +34,9 @@ export function About() {
         try {
             const info = await updateService.checkForUpdates(true);
             setUpdateInfo(info);
-            if (info.available) {
+            if (info.disabled) {
+                toast.info('Meetily Personal updates are installed by rebuilding this project.');
+            } else if (info.available) {
                 setShowUpdateDialog(true);
             } else {
                 toast.success('You are running the latest version');

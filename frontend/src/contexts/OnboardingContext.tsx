@@ -61,7 +61,7 @@ interface OnboardingContextType {
   setDatabaseExists: (value: boolean) => void;
   setPermissionStatus: (permission: keyof OnboardingPermissions, status: PermissionStatus) => void;
   setPermissionsSkipped: (skipped: boolean) => void;
-  completeOnboarding: () => Promise<void>;
+  completeOnboarding: (options?: { configureLater?: boolean }) => Promise<void>;
   startBackgroundDownloads: (options: StartBackgroundDownloadsOptions) => Promise<void>;
   retryParakeetDownload: () => Promise<void>;
 }
@@ -468,7 +468,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
   };
 
-  const completeOnboarding = async () => {
+  const completeOnboarding = async ({ configureLater = false } = {}) => {
     try {
       // Set completion flag to prevent race conditions with auto-save
       isCompletingRef.current = true;
@@ -477,6 +477,19 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = undefined;
+      }
+
+      // Complete setup without entering the download step. Native completion
+      // preserves existing summary/API settings and does not claim model readiness.
+      if (configureLater) {
+        await invoke('complete_onboarding', {
+          model: '', deferModels: true, parakeetReady: false, summaryReady: false,
+        });
+        setParakeetDownloaded(false);
+        setSummaryModelDownloaded(false);
+        setCompleted(true);
+        isCompletingRef.current = false;
+        return;
       }
 
       let modelToSave = selectedSummaryModel;
@@ -497,6 +510,9 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       // Onboarding always uses builtin-ai with selected model
       await invoke('complete_onboarding', {
         model: modelToSave,
+        deferModels: false,
+        parakeetReady: parakeetDownloaded,
+        summaryReady: selectedModelReady,
       });
       setCompleted(true);
       console.log('[OnboardingContext] Onboarding completed with model:', modelToSave);

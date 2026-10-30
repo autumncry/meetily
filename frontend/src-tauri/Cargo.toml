@@ -41,6 +41,9 @@ default = ["platform-default"]  # Automatically enables best backend per platfor
 # Platform-appropriate defaults - see target-specific dependencies below
 platform-default = []
 
+# Separate local Mac delivery: isolated recordings and no upstream updater.
+personal-mac = []
+
 # Manual GPU acceleration options (for power users to override defaults)
 metal = ["whisper-rs/metal"]       # macOS: Apple Metal GPU (Auto-enabled on macOS)
 coreml = ["whisper-rs/coreml"]     # macOS: Apple CoreML acceleration

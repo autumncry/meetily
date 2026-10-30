@@ -11,6 +11,16 @@ pub const DEFAULT_WHISPER_MODEL: &str = "large-v3-turbo";
 /// This is the quantized version optimized for speed.
 pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 
+/// Fresh personal installs use multilingual Whisper. This selects a model only;
+/// downloading it remains an explicit action in Settings.
+pub fn default_transcript_model() -> (&'static str, &'static str) {
+    if cfg!(feature = "personal-mac") {
+        ("whisper", DEFAULT_WHISPER_MODEL)
+    } else {
+        ("parakeet", DEFAULT_PARAKEET_MODEL)
+    }
+}
+
 /// Whisper model catalog with metadata for all supported models.
 /// Used by both WhisperEngine::discover_models() and discover_models_standalone().
 ///

@@ -7,10 +7,11 @@
 
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { getVersion } from '@tauri-apps/api/app';
+import { getIdentifier, getVersion } from '@tauri-apps/api/app';
 
 export interface UpdateInfo {
   available: boolean;
+  disabled?: boolean;
   currentVersion: string;
   version?: string;
   date?: string;
@@ -39,6 +40,11 @@ export class UpdateService {
    * @returns Promise with update information
    */
   async checkForUpdates(force = false): Promise<UpdateInfo> {
+    // Personal builds are updated by rebuilding this fork, never by replacing
+    // them with an upstream release. Avoid even making an upstream request.
+    if (await getIdentifier() === 'com.autumncry.meetily.personal') {
+      return { available: false, currentVersion: await getVersion(), disabled: true };
+    }
     // Prevent concurrent update checks
     if (this.updateCheckInProgress) {
       throw new Error('Update check already in progress');
@@ -95,6 +101,9 @@ export class UpdateService {
     update: Update,
     onProgress?: (progress: UpdateProgress) => void
   ): Promise<void> {
+    if (await getIdentifier() === 'com.autumncry.meetily.personal') {
+      throw new Error('Updates are disabled for Meetily Personal. Rebuild the personal app.');
+    }
     try {
       // Download the update
       await update.download();

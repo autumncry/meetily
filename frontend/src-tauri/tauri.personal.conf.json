@@ -1,0 +1,15 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Meetily Personal",
+  "identifier": "com.autumncry.meetily.personal",
+  "build": { "features": ["personal-mac"] },
+  "app": {
+    "windows": [{
+      "label": "main", "title": "Meetily Personal", "width": 1100,
+      "height": 760, "resizable": true, "fullscreen": false,
+      "theme": "Light", "decorations": true
+    }]
+  },
+  "bundle": { "targets": ["app"], "createUpdaterArtifacts": false },
+  "plugins": { "updater": { "endpoints": [] } }
+}

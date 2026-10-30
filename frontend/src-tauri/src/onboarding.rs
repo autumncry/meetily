@@ -172,46 +172,53 @@ pub async fn complete_onboarding<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     model: String,
+    defer_models: Option<bool>,
+    parakeet_ready: Option<bool>,
+    summary_ready: Option<bool>,
 ) -> Result<(), String> {
+    let defer_models = defer_models.unwrap_or(false);
     info!("Completing onboarding with builtin-ai model: {}", model);
 
     // Step 1: Save model configuration to SQLite database FIRST
     let pool = state.db_manager.pool();
 
-    // Onboarding always uses builtin-ai (local LLM)
-    if let Err(e) = SettingsRepository::save_model_config(
-        pool,
-        "builtin-ai",
-        &model,
-        "large-v3",
-        None,
-    ).await {
-        error!("Failed to save builtin-ai model config: {}", e);
-        return Err(format!("Failed to save builtin-ai model config: {}", e));
+    // Explicit download onboarding selects built-in AI. Deferring setup keeps
+    // any existing custom summary provider/API configuration intact.
+    if !defer_models {
+        if let Err(e) = SettingsRepository::save_model_config(
+            pool, "builtin-ai", &model, "large-v3", None,
+        ).await {
+            error!("Failed to save builtin-ai model config: {}", e);
+            return Err(format!("Failed to save builtin-ai model config: {}", e));
+        }
+        info!("Saved builtin-ai model config: model={}", model);
     }
-    info!("Saved builtin-ai model config: model={}", model);
 
-    // Save transcription model config (parakeet provider) - always parakeet
-    if let Err(e) = SettingsRepository::save_transcript_config(
-        pool,
-        "parakeet",
-        crate::config::DEFAULT_PARAKEET_MODEL,
-    ).await {
-        error!("Failed to save transcription model config: {}", e);
-        return Err(format!("Failed to save transcription model config: {}", e));
+    // Preserve an existing choice when setup is deferred. A fresh personal
+    // installation defaults to multilingual Whisper; no model is downloaded here.
+    if !defer_models || SettingsRepository::get_transcript_config(pool).await
+        .map_err(|e| format!("Failed to read transcription config: {}", e))?.is_none() {
+        let (provider, transcript_model) = if defer_models {
+            ("whisper", crate::config::DEFAULT_WHISPER_MODEL)
+        } else {
+            ("parakeet", crate::config::DEFAULT_PARAKEET_MODEL)
+        };
+        if let Err(e) = SettingsRepository::save_transcript_config(
+            pool, provider, transcript_model,
+        ).await {
+            error!("Failed to save transcription model config: {}", e);
+            return Err(format!("Failed to save transcription model config: {}", e));
+        }
+        info!("Saved transcription model config: provider={}, model={}", provider, transcript_model);
     }
-    info!("Saved transcription model config: provider=parakeet, model={}", crate::config::DEFAULT_PARAKEET_MODEL);
 
     // Step 2: Only NOW mark onboarding as complete (after DB operations succeed)
     let mut status = load_onboarding_status(&app)
         .await
         .map_err(|e| format!("Failed to load onboarding status: {}", e))?;
 
-    status.completed = true;
-    status.current_step = 4; // Max step (4 on macOS with permissions, 3 on other platforms)
-    status.model_status.parakeet = "downloaded".to_string();
-    status.model_status.summary = "downloaded".to_string();
-    status.model_status.selected_summary_model = Some(model.clone());
+    finish_onboarding_status(&mut status, &model, defer_models,
+        parakeet_ready.unwrap_or(false), summary_ready.unwrap_or(false));
 
     save_onboarding_status(&app, &status)
         .await
@@ -221,9 +228,39 @@ pub async fn complete_onboarding<R: Runtime>(
     Ok(())
 }
 
+fn finish_onboarding_status(status: &mut OnboardingStatus, model: &str, defer_models: bool,
+    parakeet_ready: bool, summary_ready: bool) {
+    status.completed = true;
+    status.current_step = 4;
+    status.model_status.parakeet = if !defer_models && parakeet_ready { "downloaded" } else { "not_downloaded" }.to_string();
+    status.model_status.summary = if !defer_models && summary_ready { "downloaded" } else { "not_downloaded" }.to_string();
+    if !model.is_empty() {
+        status.model_status.selected_summary_model = Some(model.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_setup_completes_without_model_readiness() {
+        let mut status = OnboardingStatus::default();
+        finish_onboarding_status(&mut status, "", true, true, true);
+        assert!(status.completed);
+        assert_eq!(status.model_status.parakeet, "not_downloaded");
+        assert_eq!(status.model_status.summary, "not_downloaded");
+        assert_eq!(status.model_status.selected_summary_model, None);
+    }
+
+    #[test]
+    fn normal_completion_does_not_mark_pending_models_downloaded() {
+        let mut status = OnboardingStatus::default();
+        finish_onboarding_status(&mut status, "qwen3.5:4b", false, true, false);
+        assert_eq!(status.model_status.parakeet, "downloaded");
+        assert_eq!(status.model_status.summary, "not_downloaded");
+        assert_eq!(status.model_status.selected_summary_model.as_deref(), Some("qwen3.5:4b"));
+    }
 
     #[test]
     fn onboarding_status_deserializes_without_selected_summary_model() {
