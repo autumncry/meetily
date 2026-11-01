@@ -1,6 +1,6 @@
 # Personal speaker analysis integration
 
-Decision after the authorized local experiment: integrate optional post-meeting acoustic speaker turns with an explicit participant count. Do not expose automatic count by default; it over-split the tested two-person sample. This is experimental anonymous diarization, not identity recognition or separate audio tracks. User-provided Plaud labels are reference outputs, not gold truth.
+Decision after the authorized local experiment: integrate optional post-meeting acoustic speaker turns with an explicit participant count. Do not expose automatic count by default; it over-split the tested two-person sample. A requested count is not guaranteed: a full recording can yield fewer detected voices even when a shorter excerpt separates them. This is experimental anonymous diarization, not identity recognition or separate audio tracks. User-provided Plaud labels are reference outputs, not gold truth.
 
 ## Scope and runtime
 
@@ -13,12 +13,13 @@ Decision after the authorized local experiment: integrate optional post-meeting 
 
 - Store complete analysis runs independently, tied to meeting ID and source-audio hash. Validate schema, finite ordered in-range turns and anonymous speaker IDs before committing anything.
 - Keep model turns immutable and separate from human display names, merge aliases and any turn corrections. Use stable IDs within each run, never treat cluster numbering as stable across reruns.
-- A first successful run may become active. A rerun must not overwrite the current active result or its manual changes: retain the old run and present the new run for explicit application. Provide a result selector so previous runs and names remain recoverable.
+- Only the first stored run, with a detected raw-speaker count matching the requested count, may become active automatically. Count-mismatched results are retained as inactive previews with a persistent review warning. A rerun must not overwrite the current active result or its manual changes: retain the old run and present the new run for explicit application. Provide a result selector so previous runs and names remain recoverable.
+- Hiding speaker labels removes only the meeting's current active pointer, conditional on the selected run still being active. Preserve all runs, names, merges and undo history; users can explicitly apply a result again. Later analysis must not automatically restore labels after they have been hidden, and stale or cross-meeting hide actions cannot clear another active result.
 - Names are Unicode strings. Merges are transactional within one run, with self/cross-run/cycle validation and a way to undo the merge. Do not mutate original transcript text or delete recordings.
 
 ## UI and export
 
-- Add a focused Speakers panel to meeting details: backend readiness, participant count, Analyze/Cancel, result selection/application, names and merge controls, and timestamped speaker turns. Reuse existing audio seeking where possible.
+- Add a focused Speakers panel to meeting details: backend readiness, requested participant count, Analyze/Cancel, result selection/application, reversible Hide speaker labels, names and merge controls, and timestamped speaker turns. Distinguish requested count, detected unique raw speaker IDs and groups after manual merges; merging groups does not change the model's detected count. Keep mismatches visibly marked for manual review. Reuse existing audio seeking where possible.
 - Transcript timestamps are coarse VAD chunks. Do not invent word-level alignment or split text based solely on model boundaries. A chunk overlapping multiple speakers must be marked as mixed/ambiguous rather than assigning a false single speaker.
 - Derive transcript display labels from the active run and overlay names/merges. Export adapters receive these labels without duplicating the rendering logic; names should update in transcript exports. Preserve all transcript text and timestamps. Summary text is not rewritten merely because a speaker was renamed.
 
@@ -26,7 +27,7 @@ Decision after the authorized local experiment: integrate optional post-meeting 
 
 - Test invalid model output/error/cancel leaves prior data unchanged; editing names/merges survives reload; self/cyclic/cross-run merges are rejected; undo restores grouping; a rerun cannot erase or silently replace manual changes.
 - Test interval labels for single, mixed, gap and overlapping turns; coarse chunks must not claim finer attribution than evidence supports.
-- Test UI readiness, participant count, job state, cancel/error, apply-result and editable labels. Test one exported document includes current labels while preserving source content.
+- Test UI readiness, participant count, job state, cancel/error, apply-result and editable labels. Test mismatch preview behavior, matching-first-run activation, raw counts after merging, hide/restore preservation, stale/cross-meeting hide safety and reruns retaining hidden labels. Test one exported document includes current labels while preserving source content.
 - Reuse actual local experiment assets for an end-to-end integration check; do not commit private audio, reference labels or generated runs. Root performs native GUI acceptance and final build/review.
 
 This design adds no MCP, cloud transcription, voiceprint enrollment, unattended recording or cross-platform support.
