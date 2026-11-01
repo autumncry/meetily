@@ -34,6 +34,95 @@ pub(super) async fn db() -> SqlitePool {
         .unwrap();
     p
 }
+fn one_detected_voice() -> Value {
+    let mut raw = output();
+    raw["turns"][1]["speaker"] = json!("speaker-01");
+    raw["validation"]["speaker_count"] = json!(1);
+    raw
+}
+
+#[tokio::test]
+async fn first_count_mismatch_is_stored_inactive_and_never_replaces_active_labels() {
+    let p = db().await;
+    let mismatched = persist(&p, "m", &one_detected_voice(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    let saved = snapshot(&p, "m").await.unwrap();
+    assert_eq!(saved.active_id, None);
+    assert_eq!(saved.runs.len(), 1);
+    assert_eq!(saved.runs[0].id, mismatched);
+    assert_eq!(saved.runs[0].requested_speakers, 2);
+    assert_eq!(
+        saved.runs[0]
+            .turns
+            .iter()
+            .map(|t| &t.speaker)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+    let matched = persist(&p, "other", &output(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot(&p, "other").await.unwrap().active_id,
+        Some(matched.clone())
+    );
+    persist(&p, "other", &one_detected_voice(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot(&p, "other").await.unwrap().active_id,
+        Some(matched)
+    );
+}
+
+#[tokio::test]
+async fn deactivate_is_scoped_stale_safe_reversible_and_preserves_hidden_labels_on_rerun() {
+    let p = db().await;
+    let first = persist(&p, "m", &output(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    edit(&p, "m", &first, "rename", "speaker-01", "保留姓名")
+        .await
+        .unwrap();
+    edit(&p, "m", &first, "merge", "speaker-02", "speaker-01")
+        .await
+        .unwrap();
+    let before = snapshot(&p, "m").await.unwrap().runs.remove(0);
+    edit(&p, "m", &first, "deactivate", "", "").await.unwrap();
+    let hidden = snapshot(&p, "m").await.unwrap();
+    assert_eq!(hidden.active_id, None);
+    assert_eq!(
+        serde_json::to_value(&hidden.runs[0]).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    let second = persist(&p, "m", &output(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    assert_eq!(snapshot(&p, "m").await.unwrap().active_id, None);
+    edit(&p, "m", &first, "activate", "", "").await.unwrap();
+    assert_eq!(
+        snapshot(&p, "m").await.unwrap().active_id,
+        Some(first.clone())
+    );
+    let other = persist(&p, "other", &output(), &"a".repeat(64), 2)
+        .await
+        .unwrap();
+    assert!(edit(&p, "other", &first, "deactivate", "", "")
+        .await
+        .is_err());
+    assert_eq!(snapshot(&p, "other").await.unwrap().active_id, Some(other));
+    edit(&p, "m", &second, "activate", "", "").await.unwrap();
+    assert!(edit(&p, "m", &first, "deactivate", "", "").await.is_err());
+    assert_eq!(snapshot(&p, "m").await.unwrap().active_id, Some(second));
+    edit(&p, "m", &first, "activate", "", "").await.unwrap();
+    let restored = snapshot(&p, "m").await.unwrap();
+    assert_eq!(
+        serde_json::to_value(restored.runs.iter().find(|r| r.id == first).unwrap()).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+}
 #[test]
 fn accepts_overlap_but_rejects_wrong_contract_bounds_ids_and_count() {
     let good = output();

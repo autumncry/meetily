@@ -1,6 +1,6 @@
 import type { useSpeakers } from '@/hooks/meeting-details/useSpeakers';
 import { useEffect, useState } from 'react';
-import { speakerName, speakerRoot, SpeakerRun } from '@/lib/speakers';
+import { speakerCounts, speakerName, speakerRoot, SpeakerRun } from '@/lib/speakers';
 import { formatTimestamp } from '@/lib/meeting-export/model';
 const control='rounded border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50';
 function NameEditor({run,id,disabled,save}:{run:SpeakerRun;id:string;disabled:boolean;save:(value:string)=>Promise<void>}) {
@@ -30,14 +30,18 @@ export function SpeakersPanel({controller,isRecording=false}:{controller:ReturnT
   const busy=view?.status.state==='running';
   const valid=Number.isInteger(Number(count)) && Number(count)>=1 && Number(count)<=12;
   const ids=run?[...new Set(run.turns.map(t=>speakerRoot(run,t.speaker)))]:[];
+  const counts=run?speakerCounts(run):undefined;
+  const activeRun=runs.find(r=>r.id===view?.snapshot.active_id);
+  const mismatchRun=counts?.mismatch?run:activeRun && speakerCounts(activeRun).mismatch?activeRun:undefined;
+  const mismatchCounts=mismatchRun?speakerCounts(mismatchRun):undefined;
   const edit=(action:string,speaker='',value='')=>act(action,{runId:selected,speaker,value});
   return <details className="border-b border-gray-200 bg-white text-gray-800">
-    <summary className="cursor-pointer px-4 py-2 text-sm font-medium">Speakers <span className="font-normal text-gray-500">· experimental, after recording{busy?' · analyzing…':''}</span></summary>
+    <summary className="cursor-pointer px-4 py-2 text-sm font-medium">Speakers <span className="font-normal text-gray-500">· experimental, after recording{busy?' · analyzing…':''}</span>{mismatchRun && <span className="text-amber-800"> · count mismatch — review required</span>}</summary>
     <div className="max-h-[360px] overflow-y-auto px-4 pb-4 space-y-3">
-      <p className="text-xs text-gray-500">Anonymous voices; enter names yourself. Only two-person recordings have been validated. Mixed transcript chunks keep their original text and timing.</p>
+      <p className="text-xs text-gray-500">Anonymous voices; enter names yourself. Tested on two-person recordings, but long recordings can still miss voices. Mixed transcript chunks keep their original text and timing.</p>
       <p className="text-xs">{view?.readiness || 'Checking local runtime…'}</p>
       <div className="flex flex-wrap items-center gap-2">
-        <label className="text-sm" htmlFor="speaker-count">Participants</label>
+        <label className="text-sm" htmlFor="speaker-count">Requested participants</label>
         <input id="speaker-count" aria-label="Participant count" className={control+' w-16'} type="number" min={1} max={12} step={1} value={count} disabled={busy||pending} onChange={e=>setCount(e.target.value)}/>
         <button className={control} disabled={!view?.ready||!valid||busy||pending||isRecording} onClick={()=>act('start',{count:Number(count)})}>Analyze speakers</button>
         {busy && <button className={control} disabled={pending} onClick={()=>act('cancel')}>Cancel analysis</button>}
@@ -52,11 +56,16 @@ export function SpeakersPanel({controller,isRecording=false}:{controller:ReturnT
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm" htmlFor="speaker-result">Result ({runs.length} saved)</label>
           <select id="speaker-result" aria-label="Speaker result" className={control+' max-w-full'} value={selected} disabled={pending} onChange={e=>setSelected(e.target.value)}>
-            {runs.map((r,i)=><option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString()} · {r.requested_speakers} participants · {r.id.slice(0,6)}{r.id===view?.snapshot.active_id?' · active':i===0?' · newest':''}</option>)}
+            {runs.map((r,i)=><option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString()} · requested {r.requested_speakers} · detected {speakerCounts(r).detected} · {r.id.slice(0,6)}{r.id===view?.snapshot.active_id?' · active':i===0?' · newest':''}</option>)}
           </select>
           <button className={control} disabled={pending||!run||selected===view?.snapshot.active_id} onClick={()=>edit('activate')}>Apply selected result</button>
+          <button className={control} disabled={pending||!run||selected!==view?.snapshot.active_id} onClick={()=>edit('deactivate')}>Hide speaker labels</button>
         </div>
+        {mismatchRun && mismatchCounts && <p aria-label="Speaker count mismatch" role="alert" className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">
+          {mismatchRun.id===selected?'Selected':'Active'} result: requested {mismatchCounts.requested}, detected {mismatchCounts.detected}. The requested count is not guaranteed. Review this result manually before using its labels. You can hide active labels without deleting the result or your edits.
+        </p>}
         {run && <>
+          <p aria-label="Speaker counts" className="text-sm">Requested: {counts!.requested} · Detected voices: {counts!.detected} · Groups after merges: {counts!.groups}</p>
           <p className="text-xs text-gray-500">{selected===view?.snapshot.active_id?'Active in transcript and exports.':'Preview only. Apply explicitly to change transcript and export labels.'} Names belong to this result only.</p>
           <div className="space-y-2">{ids.map(id=><NameEditor key={run.id+id} run={run} id={id} disabled={pending} save={value=>edit('rename',id,value)}/>)}</div>
           <div className="flex flex-wrap items-center gap-2">

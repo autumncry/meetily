@@ -53,10 +53,21 @@ Only one job per meeting is allowed; different meetings may be analyzed
 independently. No microphone or system capture is started by analysis.
 
 Runs are stored transactionally in SQLite with meeting ID, source SHA-256,
-original worker metadata, and immutable turns. The first successful run becomes
-active. Later runs are saved separately and require **Apply selected result**.
+original worker metadata, and immutable turns. Only a first run whose detected
+voice count matches the requested count becomes active automatically. A count
+mismatch is saved as an inactive preview with a persistent review warning:
+requesting two participants does not guarantee two detected voices, especially
+on long recordings. The panel distinguishes requested participants, detected
+raw voices and groups after manual merges; a merge does not change the raw count.
+Later runs are saved separately and require **Apply selected result**.
 The selector restores previous runs together with their names and merge history.
 Cluster numbers have meaning only within their run.
+
+**Hide speaker labels** is available for the selected active result. It removes
+only this meeting's active pointer; all runs, names, merges and undo history
+remain available. **Apply selected result** restores them. A later rerun stays
+inactive after labels are hidden, and a stale Hide action cannot clear a
+different result that has since become active.
 
 Names are Unicode, up to 120 characters. **Merge voices** merges groups in the
 selected run; **Undo last merge** restores the previous grouping. These human

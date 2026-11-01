@@ -142,15 +142,24 @@ pub async fn persist(
     hash: &str,
     count: u8,
 ) -> Result<String, String> {
-    validate(raw, hash, count)?;
+    let turns = validate(raw, hash, count)?;
+    let detected = turns
+        .iter()
+        .map(|turn| &turn.speaker)
+        .collect::<BTreeSet<_>>()
+        .len();
     let id = uuid::Uuid::new_v4().to_string();
     let mut tx = pool.begin().await.map_err(err)?;
     sqlx::query("INSERT INTO speaker_runs (id,meeting_id,created_at,audio_hash,requested_speakers,raw_result,overlay) VALUES (?,?,?,?,?,?,?)")
         .bind(&id).bind(meeting).bind(chrono::Utc::now().to_rfc3339()).bind(hash).bind(count as i64)
         .bind(raw.to_string()).bind(serde_json::to_string(&Overlay::default()).map_err(err)?)
         .execute(&mut *tx).await.map_err(err)?;
-    sqlx::query("INSERT INTO speaker_active (meeting_id,run_id) VALUES (?,?) ON CONFLICT(meeting_id) DO NOTHING")
-        .bind(meeting).bind(&id).execute(&mut *tx).await.map_err(err)?;
+    // Only a matching first run may auto-activate. A requested count is not a
+    // guarantee, and later runs must not undo an explicit decision to hide labels.
+    if detected == count as usize {
+        sqlx::query("INSERT INTO speaker_active (meeting_id,run_id) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM speaker_runs WHERE meeting_id=? AND id<>?) ON CONFLICT(meeting_id) DO NOTHING")
+            .bind(meeting).bind(&id).bind(meeting).bind(&id).execute(&mut *tx).await.map_err(err)?;
+    }
     tx.commit().await.map_err(err)?;
     Ok(id)
 }
@@ -205,6 +214,25 @@ pub async fn edit(
     value: &str,
 ) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(err)?;
+    if action == "deactivate" {
+        // Compare-and-delete protects an active result selected concurrently.
+        // No raw result or overlay is rewritten by hiding labels.
+        let removed = sqlx::query("DELETE FROM speaker_active WHERE meeting_id=? AND run_id=?")
+            .bind(meeting)
+            .bind(run)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?
+            .rows_affected();
+        if removed != 1 {
+            return Err(
+                "The active result changed or is already hidden. Refresh before hiding labels."
+                    .into(),
+            );
+        }
+        tx.commit().await.map_err(err)?;
+        return Ok(());
+    }
     // A write first acquires SQLite's write lock before reading mutable overlays.
     let found = sqlx::query("UPDATE speaker_runs SET overlay=overlay WHERE id=? AND meeting_id=?")
         .bind(run)

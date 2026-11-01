@@ -5,6 +5,15 @@ export interface SpeakerRun {
   overlay: { names: Record<string, string>; aliases: Record<string, string>; undo: Record<string, string>[] };
 }
 export interface SpeakerSnapshot { active_id: string | null; runs: SpeakerRun[] }
+export function speakerCounts(run: SpeakerRun) {
+  const rawIds = new Set(run.turns.map(turn => turn.speaker));
+  return {
+    requested: run.requested_speakers,
+    detected: rawIds.size,
+    groups: new Set([...rawIds].map(id => speakerRoot(run, id))).size,
+    mismatch: rawIds.size !== run.requested_speakers,
+  };
+}
 export function speakerRoot(run: SpeakerRun, id: string): string {
   const seen=new Set<string>();
   while(run.overlay.aliases[id] && !seen.has(id)) { seen.add(id); id=run.overlay.aliases[id]; }

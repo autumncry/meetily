@@ -30,9 +30,11 @@ test('result preview requires explicit apply and name, merge and undo controls t
     expect(hook.activeRun?.id).toBe('old');
     await act(async()=>r.root.findByProps({'aria-label':'Speaker result'}).props.onChange({target:{value:'new'}}));
     expect(hook.activeRun?.overlay.names['speaker-01']).toBe('旧名字');
+    expect(button('Hide speaker labels').props.disabled).toBe(true);
     expect(JSON.stringify(r.toJSON())).toContain('Preview only');
     await act(async()=>button('Apply selected result').props.onClick());
     expect(hook.activeRun?.id).toBe('new');
+    expect(button('Hide speaker labels').props.disabled).toBe(false);
     expect(hook.activeRun?.overlay.names).toEqual({});
     await act(async()=>r.root.findByProps({'aria-label':'Name for speaker-01'}).props.onChange({target:{value:'王老师'}}));
     await act(async()=>button('Save name').props.onClick());
@@ -41,9 +43,48 @@ test('result preview requires explicit apply and name, merge and undo controls t
     await act(async()=>r.root.findByProps({'aria-label':'Merge target'}).props.onChange({target:{value:'speaker-01'}}));
     await act(async()=>button('Merge voices').props.onClick());
     expect(hook.activeRun?.overlay.aliases['speaker-02']).toBe('speaker-01');
+    expect(r.root.findByProps({'aria-label':'Speaker counts'}).children.join('')).toBe('Requested: 2 · Detected voices: 2 · Groups after merges: 1');
+    expect(r.root.findAllByProps({'aria-label':'Speaker count mismatch'})).toHaveLength(0);
     await act(async()=>button('Undo last merge').props.onClick());
     expect(hook.activeRun?.overlay.aliases).toEqual({});
     expect(edits.map(e=>e.action)).toEqual(['activate','rename','merge','undo']);
+  }finally{await act(async()=>r.unmount());}
+});
+test('raw count mismatch remains visible on reload and labels can be hidden and restored without losing names',async()=>{
+  const mismatch:SpeakerRun={id:'mismatch',meeting_id:'m',created_at:'2026-11-01T12:00:00Z',audio_hash:'a',requested_speakers:2,duration:10,
+    turns:[{start:0,end:10,speaker:'speaker-01'}],overlay:{names:{'speaker-01':'保留名字'},aliases:{},undo:[]}};
+  const current:SpeakerView={...initial(),snapshot:{active_id:null,runs:[mismatch]}};
+  const actions:string[]=[];
+  const api:SpeakerApi=async<T,>(command:string,args:Record<string,unknown>)=>{
+    if(command==='speaker_edit'){
+      expect(args.runId).toBe('mismatch');expect(args.meetingId).toBe('m');
+      actions.push(String(args.action));
+      current.snapshot.active_id=args.action==='deactivate'?null:'mismatch';
+    }
+    return structuredClone(current) as T;
+  };
+  let hook!:ReturnType<typeof useSpeakers>;
+  function Harness(){hook=useSpeakers('m',api);return <SpeakersPanel controller={hook}/>;}
+  let r!:ReactTestRenderer;await act(async()=>{r=create(<Harness/>);});
+  const button=(name:string)=>r.root.findAllByType('button').find(b=>b.props.children===name)!;
+  try{
+    expect(r.root.findByProps({'aria-label':'Speaker counts'}).children.join('')).toBe('Requested: 2 · Detected voices: 1 · Groups after merges: 1');
+    const result=r.root.findByProps({'aria-label':'Speaker result'}).findByType('option').children.join('');
+    expect(result).toContain('requested 2 · detected 1');
+    expect(result).not.toContain('2 participants');
+    expect(r.root.findByProps({'aria-label':'Speaker count mismatch'}).children.join('')).toContain('requested count is not guaranteed');
+    expect(button('Hide speaker labels').props.disabled).toBe(true);
+    await act(async()=>hook.refresh());
+    expect(r.root.findAllByProps({'aria-label':'Speaker count mismatch'})).toHaveLength(1);
+    await act(async()=>button('Apply selected result').props.onClick());
+    expect(button('Hide speaker labels').props.disabled).toBe(false);
+    await act(async()=>button('Hide speaker labels').props.onClick());
+    expect(hook.activeRun).toBeUndefined();
+    expect(hook.view?.snapshot.runs[0].overlay.names['speaker-01']).toBe('保留名字');
+    expect(button('Hide speaker labels').props.disabled).toBe(true);
+    await act(async()=>button('Apply selected result').props.onClick());
+    expect(hook.activeRun?.overlay.names['speaker-01']).toBe('保留名字');
+    expect(actions).toEqual(['activate','deactivate','activate']);
   }finally{await act(async()=>r.unmount());}
 });
 test('a late action from a previous visit cannot unlock an action on a newer visit to the same meeting',async()=>{

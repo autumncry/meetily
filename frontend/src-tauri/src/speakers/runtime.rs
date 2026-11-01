@@ -339,14 +339,23 @@ pub async fn speaker_start(
             match result {
                 Ok((raw, hash)) => persist(&pool, &meeting_id, &raw, &hash, count)
                     .await
-                    .map(|_| ()),
+                    // persist validates that this count equals the unique raw IDs.
+                    .map(|_| {
+                        raw["validation"]["speaker_count"]
+                            .as_u64()
+                            .unwrap_or_default()
+                    }),
                 Err(e) => Err(e),
             }
         };
         match result {
-            Ok(()) => {
+            Ok(detected) => {
                 status.state = "complete".into();
-                status.message="Analysis saved. Existing active results and names were retained; apply a new result explicitly.".into();
+                status.message = if detected != count as u64 {
+                    format!("Saved as an inactive preview: requested {count}, detected {detected}. The requested count is not guaranteed. Review this result before applying it; existing active labels are unchanged.")
+                } else {
+                    format!("Analysis saved: requested {count}, detected {detected}. Existing active results and names were retained; apply a new result explicitly.")
+                };
             }
             Err(e) => {
                 status.state = if job.cancel.is_cancelled() {
