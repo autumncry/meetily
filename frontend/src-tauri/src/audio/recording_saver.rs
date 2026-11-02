@@ -50,6 +50,7 @@ pub struct DeviceInfo {
 pub struct RecordingSaver {
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
     meeting_folder: Option<PathBuf>,
+    finalized_audio_path: Option<PathBuf>,
     meeting_name: Option<String>,
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
@@ -61,6 +62,7 @@ impl RecordingSaver {
         Self {
             incremental_saver: None,
             meeting_folder: None,
+            finalized_audio_path: None,
             meeting_name: None,
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
@@ -258,6 +260,7 @@ impl RecordingSaver {
         // Write initial metadata.json
         self.write_metadata(&meeting_folder, &metadata)?;
 
+        self.finalized_audio_path = None;
         self.meeting_folder = Some(meeting_folder);
         self.metadata = Some(metadata);
 
@@ -348,11 +351,9 @@ impl RecordingSaver {
     ///
     /// # Arguments
     /// * `app` - Tauri app handle for emitting events
-    /// * `recording_duration` - Actual recording duration in seconds (from RecordingState)
     pub async fn stop_and_save<R: Runtime>(
         &mut self,
         app: &AppHandle<R>,
-        recording_duration: Option<f64>
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
 
@@ -364,22 +365,18 @@ impl RecordingSaver {
         // Give time for final chunks
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-        // Check if incremental saver exists (indicates auto_save was enabled)
-        let should_save_audio = self.incremental_saver.is_some();
-
-        if !should_save_audio {
-            info!("⚠️  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
-            info!("✅ Transcripts and metadata already saved incrementally");
-            return Ok(None);
-        }
-
-        // Finalize incremental saver (merge checkpoints into final audio.mp4)
-        let final_audio_path = if let Some(saver_arc) = &self.incremental_saver {
+        // Finalize audio once. Transcript-only sessions still need completed metadata.
+        let final_audio_path = if let Some(path) = &self.finalized_audio_path {
+            // Checkpoints are removed after success. A retry or late ASR flush
+            // must reuse the saved audio instead of attempting to merge it again.
+            Some(path.clone())
+        } else if let Some(saver_arc) = &self.incremental_saver {
             let mut saver = saver_arc.lock().await;
             match saver.finalize().await {
                 Ok(path) => {
                     info!("✅ Successfully finalized audio: {}", path.display());
-                    path
+                    self.finalized_audio_path = Some(path.clone());
+                    Some(path)
                 }
                 Err(e) => {
                     error!("❌ Failed to finalize incremental saver: {}", e);
@@ -387,8 +384,8 @@ impl RecordingSaver {
                 }
             }
         } else {
-            error!("No incremental saver initialized - cannot save recording");
-            return Err("No incremental saver initialized".to_string());
+            info!("No audio saver initialized - finalizing transcripts and metadata only");
+            None
         };
 
         // Save final transcripts.json with validation
@@ -410,17 +407,17 @@ impl RecordingSaver {
         // Update metadata to completed status with actual recording duration
         if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
             metadata.status = "completed".to_string();
-            metadata.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            metadata.completed_at.get_or_insert_with(|| chrono::Utc::now().to_rfc3339());
 
-            // Use actual recording duration from RecordingState (more accurate than transcript segments)
-            // Falls back to last transcript segment if duration not provided
-            metadata.duration_seconds = recording_duration.or_else(|| {
-                if let Ok(segments) = self.transcript_segments.lock() {
-                    segments.last().map(|seg| seg.audio_end_time)
-                } else {
-                    None
-                }
-            });
+            // The stop command clears RecordingState before saving. ASR end times
+            // describe speech coverage, while the finalized file also contains silence
+            // and AAC/concat timing. Read the actual saved audio without decoding it.
+            // Without saved audio, leave duration unknown rather than substitute
+            // wall-clock time or speech coverage for playable recording duration.
+            metadata.duration_seconds = final_audio_path.as_ref()
+                .map(|path| super::import::extract_duration_from_metadata(path))
+                .transpose()
+                .map_err(|e| format!("Failed to read finalized audio duration: {}", e))?;
 
             if let Err(e) = self.write_metadata(folder, &metadata) {
                 error!("❌ Failed to update metadata to completed: {}", e);
@@ -428,28 +425,29 @@ impl RecordingSaver {
             }
 
             info!("✅ Metadata updated with duration: {:?}s", metadata.duration_seconds);
+            self.metadata = Some(metadata);
         }
 
-        // Emit save event with audio and transcript paths
-        let save_event = serde_json::json!({
-            "audio_file": final_audio_path.to_string_lossy(),
-            "transcript_file": self.meeting_folder.as_ref()
-                .map(|f| f.join("transcripts.json").to_string_lossy().to_string()),
-            "meeting_name": self.meeting_name,
-            "meeting_folder": self.meeting_folder.as_ref()
-                .map(|f| f.to_string_lossy().to_string())
-        });
+        // Emit the existing audio-save event only when audio was saved.
+        if let Some(final_audio_path) = &final_audio_path {
+            let save_event = serde_json::json!({
+                "audio_file": final_audio_path.to_string_lossy(),
+                "transcript_file": self.meeting_folder.as_ref()
+                    .map(|f| f.join("transcripts.json").to_string_lossy().to_string()),
+                "meeting_name": self.meeting_name,
+                "meeting_folder": self.meeting_folder.as_ref()
+                    .map(|f| f.to_string_lossy().to_string())
+            });
 
-        if let Err(e) = app.emit("recording-saved", &save_event) {
-            warn!("Failed to emit recording-saved event: {}", e);
+            if let Err(e) = app.emit("recording-saved", &save_event) {
+                warn!("Failed to emit recording-saved event: {}", e);
+            }
         }
 
-        // Clean up transcript segments
-        if let Ok(mut segments) = self.transcript_segments.lock() {
-            segments.clear();
-        }
+        // Retain segments until this saver is dropped. Late ASR updates and
+        // repeated saves must preserve the already written transcript segments.
 
-        Ok(Some(final_audio_path.to_string_lossy().to_string()))
+        Ok(final_audio_path.map(|path| path.to_string_lossy().to_string()))
     }
 
     /// Get the meeting folder path (for passing to backend)
@@ -475,5 +473,216 @@ impl RecordingSaver {
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::recording_state::{DeviceType, RecordingState};
+    use super::*;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tempfile::TempDir;
+
+    fn synthetic_saver() -> (TempDir, RecordingSaver) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_path_buf();
+        std::fs::create_dir(folder.join(".checkpoints")).unwrap();
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(folder.clone());
+        saver.metadata = Some(MeetingMetadata {
+            version: "1.0".into(),
+            meeting_id: None,
+            meeting_name: Some("Synthetic duration regression".into()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            completed_at: None,
+            duration_seconds: None,
+            devices: DeviceInfo {
+                microphone: None,
+                system_audio: None,
+            },
+            audio_file: "audio.mp4".into(),
+            transcript_file: "transcripts.json".into(),
+            sample_rate: 48000,
+            status: "recording".into(),
+        });
+        saver.incremental_saver = Some(Arc::new(AsyncMutex::new(
+            IncrementalAudioSaver::new(folder, 48000).unwrap(),
+        )));
+        saver
+            .write_metadata(&dir.path().to_path_buf(), saver.metadata.as_ref().unwrap())
+            .unwrap();
+        (dir, saver)
+    }
+
+    fn segment(end: f64) -> TranscriptSegment {
+        TranscriptSegment {
+            id: "synthetic".into(),
+            text: "Synthetic speech".into(),
+            audio_start_time: 0.0,
+            audio_end_time: end,
+            duration: end,
+            display_time: "[00:00]".into(),
+            confidence: 1.0,
+            sequence_id: 0,
+        }
+    }
+
+    async fn add_synthetic_audio(saver: &RecordingSaver, samples: usize) {
+        // A brief tone followed by silence; the file duration includes the quiet tail.
+        let data = (0..samples)
+            .map(|i| {
+                if i < 24000 {
+                    (i as f32 * 0.0576).sin() * 0.1
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        saver
+            .incremental_saver
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .add_chunk(AudioChunk {
+                data,
+                sample_rate: 48000,
+                timestamp: 0.0,
+                chunk_id: 0,
+                device_type: DeviceType::Microphone,
+            })
+            .unwrap();
+    }
+
+    fn read_metadata(dir: &TempDir) -> MeetingMetadata {
+        serde_json::from_slice(&std::fs::read(dir.path().join("metadata.json")).unwrap()).unwrap()
+    }
+
+    fn decoded_duration(path: &std::path::Path) -> f64 {
+        let output = std::process::Command::new(super::super::ffmpeg::find_ffmpeg_path().unwrap())
+            .args(["-v", "error", "-xerror", "-i"])
+            .arg(path)
+            .args(["-f", "f32le", "-ac", "1", "-ar", "48000", "pipe:1"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "synthetic audio must decode successfully"
+        );
+        output.stdout.len() as f64 / 4.0 / 48000.0
+    }
+
+    #[tokio::test]
+    async fn completed_recording_duration_includes_silent_tail_after_state_cleanup() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let (dir, mut saver) = synthetic_saver();
+        add_synthetic_audio(&saver, 156000).await; // exactly 3.25 seconds
+        saver.add_transcript_segment(segment(0.5));
+        // The real command clears state before saving. Duration must not need it.
+        let state = RecordingState::new();
+        state.start_recording().unwrap();
+        state.cleanup();
+        let duration = state.get_active_recording_duration();
+        assert_eq!(duration, None);
+        let path = saver.stop_and_save(app.handle()).await.unwrap().unwrap();
+        let actual = decoded_duration(std::path::Path::new(&path));
+        assert!(
+            (actual - 3.25).abs() < 0.1,
+            "synthetic file duration: {actual}"
+        );
+        let metadata = read_metadata(&dir);
+        assert_eq!(metadata.status, "completed");
+        let saved = metadata
+            .duration_seconds
+            .expect("saved audio must have a duration");
+        assert!((saved - actual).abs() < 0.1, "duration must describe saved audio, including silence: metadata={saved}, decoded={actual}");
+    }
+
+    #[tokio::test]
+    async fn repeated_finalization_after_late_asr_keeps_audio_and_completed_duration() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let (dir, mut saver) = synthetic_saver();
+        add_synthetic_audio(&saver, 156000).await;
+        saver.add_transcript_segment(segment(0.5));
+        let path = saver.stop_and_save(app.handle()).await.unwrap().unwrap();
+        let original_audio = std::fs::read(&path).unwrap();
+        let completed = read_metadata(&dir);
+        let mut late = segment(0.25); // delayed/out-of-order ASR update
+        late.sequence_id = 1;
+        late.id = "late-synthetic".into();
+        saver.add_transcript_segment(late);
+        let repeated_path = saver.stop_and_save(app.handle()).await.unwrap().unwrap();
+        assert_eq!(repeated_path, path);
+        assert_eq!(std::fs::read(&path).unwrap(), original_audio);
+        let repeated = read_metadata(&dir);
+        assert_eq!(repeated.duration_seconds, completed.duration_seconds);
+        assert_eq!(repeated.completed_at, completed.completed_at);
+        let transcripts: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("transcripts.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            transcripts["total_segments"], 2,
+            "a repeated save must retain earlier segments"
+        );
+        saver.set_device_info(Some("Synthetic microphone".into()), None);
+        assert_eq!(read_metadata(&dir).status, "completed");
+        assert_eq!(
+            read_metadata(&dir).duration_seconds,
+            completed.duration_seconds
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_only_completion_keeps_duration_unknown_without_audio() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let (dir, mut saver) = synthetic_saver();
+        saver.incremental_saver = None;
+        saver.metadata.as_mut().unwrap().audio_file.clear();
+        saver.add_transcript_segment(segment(0.5));
+        assert_eq!(saver.stop_and_save(app.handle()).await.unwrap(), None);
+        let metadata = read_metadata(&dir);
+        assert_eq!(metadata.status, "completed");
+        assert!(metadata.completed_at.is_some());
+        assert_eq!(
+            metadata.duration_seconds, None,
+            "ASR coverage is not recording duration"
+        );
+        assert!(!dir.path().join("audio.mp4").exists());
+    }
+
+    #[tokio::test]
+    async fn completed_recording_without_asr_uses_merged_audio_duration() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let (dir, mut saver) = synthetic_saver();
+        add_synthetic_audio(&saver, 1440000).await; // full 30-second checkpoint
+        add_synthetic_audio(&saver, 60000).await; // 1.25-second final checkpoint
+        assert!(saver.get_transcript_segments().is_empty());
+        let path = saver.stop_and_save(app.handle()).await.unwrap().unwrap();
+        let actual = decoded_duration(std::path::Path::new(&path));
+        assert!(
+            (actual - 31.25).abs() < 0.1,
+            "merged synthetic file duration: {actual}"
+        );
+        let metadata = read_metadata(&dir);
+        let duration = metadata
+            .duration_seconds
+            .expect("no ASR is required to measure saved audio");
+        assert!(
+            (duration - actual).abs() < 0.1,
+            "metadata={duration}, decoded={actual}"
+        );
+        assert_eq!(metadata.status, "completed");
+        assert!(!dir.path().join(".checkpoints").exists());
+    }
+
+    #[tokio::test]
+    async fn empty_saved_audio_does_not_fabricate_completed_duration() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let (dir, mut saver) = synthetic_saver();
+        assert!(saver.stop_and_save(app.handle()).await.is_err());
+        let metadata = read_metadata(&dir);
+        assert_eq!(metadata.duration_seconds, None);
+        assert_ne!(metadata.status, "completed");
+        assert!(!dir.path().join("audio.mp4").exists());
     }
 }
